@@ -53,10 +53,14 @@ typedef struct {
         bool motor_enabled; /* true = motor-power relay energised            */
     } outputs;
 
-    /* --- Comms (written by modbus_bridge / app_main) ---------------------- */
+    /* --- Comms (written by uart_dma_manager / modbus_bridge / app_main) -- */
     struct {
-        uint16_t heartbeat;     /* mirrors Modbus reg 0x00                   */
-        uint8_t  fault_code;    /* reason for STATE_FAULT                    */
+        uint16_t heartbeat;         /* mirrors Modbus reg 0x00               */
+        uint8_t  fault_code;        /* reason for STATE_FAULT                */
+        uint16_t tx_used;           /* TX ring buffer bytes in use           */
+        bool     t35_active;        /* true during Modbus inter-frame gap    */
+        uint32_t telemetry_drops;   /* cumulative dropped telemetry strings  */
+        uint16_t last_rx_len;       /* last LPUART1 packet length received   */
     } comms;
 
 } RobotState_t;

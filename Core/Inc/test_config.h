@@ -11,6 +11,6 @@
    Set ACTIVE_TEST to the phase you want to test, or TEST_NONE for the
    real firmware.  This is the only line you ever need to change.
    ----------------------------------------------------------------------- */
-#define ACTIVE_TEST  TEST_PHASE1
+#define ACTIVE_TEST  TEST_PHASE3
 
 #endif /* __TEST_CONFIG_H */

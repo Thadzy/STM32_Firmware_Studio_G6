@@ -20,6 +20,7 @@
     static inline void Test_Init(void) { TestPhase2_Init(); }
     static inline void Test_Run(void)  { TestPhase2_Run();  }
 
+
 #elif (ACTIVE_TEST == TEST_PHASE3)
     #include "test_phase3.h"
     static inline void Test_Init(void) { TestPhase3_Init(); }

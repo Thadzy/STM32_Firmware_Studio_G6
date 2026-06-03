@@ -33,7 +33,10 @@
 /* Software duty cap: (6/24) × 50 = 12  — raise gradually once motion is verified */
 #define MOTOR_VOLT_LIMIT_PWM    12u
 
-/* --- Encoder (ATM103, 2048 CPR → TIM3 TI12 quadrature × 4 = 8192 cnt/rev) */
+/* --- Encoder (ATM103, 2048 CPR → TIM3 TI12 quadrature × 4 = 8192 cnt/rev)
+   ENCODER_DIRECTION: set +1 if positive PWM → increasing counts.
+                      set -1 if positive PWM → decreasing counts (flip here). */
+#define ENCODER_DIRECTION       (-1)    /* flip if motor runs away on first test */
 /* Workspace: 360° rotational, cable hard-limit 540°.
    Direct drive assumed — if a gearbox is fitted, multiply ENCODER_CPR by the ratio.
    MAX_POSITION_COUNTS = 1 full revolution = 8192 counts.
@@ -42,18 +45,57 @@
 #define WORKSPACE_MAX_DEG       360u
 #define CABLE_MAX_DEG           540u        /* absolute hardware limit — never approach */
 #define MAX_POSITION_COUNTS     8192        /* = ENCODER_CPR × (WORKSPACE_MAX_DEG / 360) */
+#define CABLE_MAX_COUNTS        12288       /* = ENCODER_CPR × (CABLE_MAX_DEG / 360)    */
 
-/* --- PID Gains (seed values — tune on hardware) ----------------------------*/
-#define PID_SPEED_KP            0.5f
-#define PID_SPEED_KI            0.1f
+/* --- PID Gains — Velocity loop (inner, 1 kHz) ------------------------------*/
+#define PID_SPEED_KP            1.58f
+#define PID_SPEED_KI            0.5f
 #define PID_SPEED_KD            0.0f
+#define PID_SPEED_IMAX          40.0f   /* integral clamp (PWM units)         */
 
-#define PID_POS_KP              2.0f
-#define PID_POS_KI              0.0f
-#define PID_POS_KD              0.05f
+/* --- PID Gains — Position loop (outer, 100 Hz) -----------------------------*/
+#define PID_POS_KP              3.0f
+#define PID_POS_KI              0.02f
+#define PID_POS_KD              0.01f
+#define PID_POS_IMAX            100.0f  /* integral clamp (rad)               */
+
+/* --- Feedforward Gains -----------------------------------------------------*/
+/* FF_VELOCITY : direct velocity FF to inner loop.  Units: PWM / (rad/s)
+   FF_ACCEL    : acceleration FF to inner loop.     Units: PWM / (rad/s²)     */
+#define FF_VELOCITY             3.03f
+#define FF_ACCEL                0.1f
+#define FF_DISTURBANCE          0.0f
+
+/* --- S-Curve Trajectory Limits ---------------------------------------------*/
+#define SCURVE_VMAX_RADS        7.304f      /* rad/s   — maximum velocity     */
+#define SCURVE_AMAX_RADS2       27.49f      /* rad/s²  — maximum acceleration */
+#define SCURVE_JMAX_RADS3       1400.0f     /* rad/s³  — maximum jerk         */
+
+/* --- ZVD Input Shaper (Zero Vibration Derivative) -------------------------*/
+/* Hardware identified: fn = 12.13 Hz, ζ = 0.041
+   ωd = ωn × √(1−ζ²) = 76.17 rad/s  →  Td = π/ωd = 41.2 ms
+   At 100 Hz outer loop: T2 = 4 steps, T3 = 8 steps
+   K = exp(−ζπ/√(1−ζ²)) = 0.8790,  Σ = (1+K)² = 3.531                      */
+#define ZVD_NATURAL_FREQ_HZ     12.13f
+#define ZVD_DAMPING_RATIO       0.041f
+#define ZVD_A1                  0.2832f     /* impulse amplitude at t=0       */
+#define ZVD_A2                  0.4981f     /* impulse amplitude at t=T2      */
+#define ZVD_A3                  0.2189f     /* impulse amplitude at t=T3      */
+#define ZVD_T2_STEPS            4u          /* delay in 100 Hz steps          */
+#define ZVD_T3_STEPS            8u
+#define ZVD_BUF_SIZE            9u          /* ZVD_T3_STEPS + 1               */
 
 /* --- Kalman Filter ---------------------------------------------------------*/
-#define KALMAN_DT               0.001f  /* 1 ms — matches TIM6 period */
+#define KALMAN_DT               0.001f      /* 1 ms — matches TIM6 period     */
+#define KALMAN_Q_POS            1e-6f       /* process noise — position       */
+#define KALMAN_Q_VEL            1e-4f       /* process noise — velocity       */
+#define KALMAN_Q_ACC            1e-2f       /* process noise — acceleration   */
+#define KALMAN_Q_JERK           1.0f        /* process noise — jerk           */
+#define KALMAN_R_POS            0.1f        /* measurement noise — position   */
+
+/* --- Position settling window ----------------------------------------------*/
+#define POSITION_DEADBAND_RAD   0.0175f     /* ≈ 1° — IsAtTarget threshold    */
+#define VELOCITY_SETTLED_RADS   0.05f       /* rad/s — near-stop threshold    */
 
 /* --- UART / Modbus ---------------------------------------------------------*/
 #define UART_TX_BUF_SIZE        1024u

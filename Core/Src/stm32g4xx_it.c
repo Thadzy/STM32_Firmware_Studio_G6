@@ -22,6 +22,9 @@
 #include "stm32g4xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "motor_controller.h"
+#include "hw_io.h"
+#include "params.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -332,5 +335,17 @@ void LPUART1_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+    if (htim->Instance != TIM6) return;
 
+    MotorCtrl_Tick1kHz();
+
+    static uint16_t s_outer_div = 0;
+    if (++s_outer_div >= OUTER_LOOP_DIVIDER) {
+        s_outer_div = 0;
+        HwIo_Poll100Hz();
+        MotorCtrl_Tick100Hz();
+    }
+}
 /* USER CODE END 1 */

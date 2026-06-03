@@ -88,12 +88,33 @@ main loop (App_Run)
 - All other packets → validate CRC-16; if valid, forward to COM10 (virtual loopback for `main.exe` on COM11).
 - Dependencies: `pyserial`, `websockets`, `pymodbus` (see `requirements.txt`).
 
+## Phase 3 — Hardware-Identified Parameters
+
+All values hardware-measured / system-identified. **Never change without asking the user.**
+
+| Parameter | Value | Units |
+|-----------|-------|-------|
+| Velocity PID Kp / Ki / Kd | 1.58 / 0.5 / 0.0 | PWM/(rad/s) |
+| Position PID Kp / Ki / Kd | 3.0 / 0.02 / 0.15 | (rad/s)/rad |
+| Velocity feedforward | 3.03 | PWM/(rad/s) |
+| Acceleration feedforward | 0.1 | PWM/(rad/s²) |
+| Disturbance feedforward | 0.0 | — |
+| Vmax | 7.304 | rad/s |
+| Amax | 27.49 | rad/s² |
+| Jmax | 1400 | rad/s³ |
+| ZVD natural frequency | 12.13 | Hz |
+| ZVD damping ratio | 0.041 | — |
+
+**Derived ZVD constants** (at 100 Hz outer loop):
+- Td = π / (ωn √(1−ζ²)) ≈ 41.2 ms → T2 = 4 steps, T3 = 8 steps
+- K = 0.8790; A1 = 0.2832, A2 = 0.4981, A3 = 0.2189
+
 ## Implementation Status
 
 - [x] Phase 1 — `params.h`, `hw_io.h/.c`
-- [ ] Phase 2 — `uart_dma_manager.h/.c`
-- [ ] Phase 3 — `kalman.h/.c`, `motor_controller.h/.c`
+- [x] Phase 2 — `uart_dma_manager.h/.c`
+- [x] Phase 3 — `kalman.h/.c`, `motor_controller.h/.c`
 - [ ] Phase 4 — `modbus_bridge.h/.c`, `app_main.h/.c`
-- [ ] Phase 5 — `stm32g4xx_it.c` USER CODE hooks
+- [x] Phase 5 — `stm32g4xx_it.c` TIM6 ISR hook (added during Phase 3)
 - [ ] Phase 6 — `main.c` USER CODE (App_Init / App_Run calls)
 - [ ] Phase 7 — `PC_Backend/serial_bridge.py`
