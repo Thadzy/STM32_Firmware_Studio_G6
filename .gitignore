@@ -1,0 +1,24 @@
+# STM32CubeIDE build output
+Debug/
+Release/
+
+# Object and dependency files
+*.o
+*.d
+*.su
+*.cyclo
+*.map
+*.elf
+*.bin
+*.hex
+*.list
+
+# STM32CubeIDE workspace metadata (not needed for build)
+.settings/
+*.launch
+
+# Base system binaries (separate repo — register map is in CLAUDE.md)
+FRA263-264_BaseSystem/
+
+# macOS
+.DS_Store
