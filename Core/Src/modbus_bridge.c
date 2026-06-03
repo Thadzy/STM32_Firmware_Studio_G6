@@ -1,0 +1,247 @@
+#include "modbus_bridge.h"
+#include "motor_controller.h"
+#include "uart_dma_manager.h"
+#include "system_state.h"
+#include "hw_io.h"
+#include "params.h"
+#include "main.h"
+#include <string.h>
+#include <math.h>
+
+/* -------------------------------------------------------------------------
+   Constants
+   ------------------------------------------------------------------------- */
+#define MB_ADDR         21u      /* slave address                            */
+#define MB_FC_READ      0x03u
+#define MB_FC_WRITE1    0x06u
+#define MB_FC_WRITEN    0x10u
+#define MB_REG_COUNT    0x33u    /* 0x00 … 0x32 inclusive                   */
+#define MB_MIN_FRAME    4u       /* addr + fc + CRC (minimum valid frame)    */
+
+/* Heartbeat tokens (ASCII: "YA" = 22881, "HI" = 18537) */
+#define HB_YA   22881u
+#define HB_HI   18537u
+#define HB_PERIOD_MS  200u      /* robot sends YA every 200 ms (≈5 Hz)      */
+
+/* -------------------------------------------------------------------------
+   Internal state
+   ------------------------------------------------------------------------- */
+static uint16_t s_regs[MB_REG_COUNT];  /* shadow register bank              */
+static uint32_t s_hb_tick;             /* last heartbeat send time           */
+static bool     s_hb_pending;          /* YA sent, waiting for HI reply      */
+
+/* -------------------------------------------------------------------------
+   CRC-16/Modbus
+   ------------------------------------------------------------------------- */
+static uint16_t crc16(const uint8_t *buf, uint16_t len)
+{
+    uint16_t crc = 0xFFFFu;
+    for (uint16_t i = 0; i < len; i++) {
+        crc ^= buf[i];
+        for (uint8_t b = 0; b < 8; b++) {
+            crc = (crc & 1u) ? ((crc >> 1) ^ 0xA001u) : (crc >> 1);
+        }
+    }
+    return crc;
+}
+
+/* -------------------------------------------------------------------------
+   Send exception response
+   ------------------------------------------------------------------------- */
+static void send_exception(uint8_t fc, uint8_t code)
+{
+    uint8_t frame[5];
+    frame[0] = MB_ADDR;
+    frame[1] = fc | 0x80u;
+    frame[2] = code;
+    uint16_t crc = crc16(frame, 3);
+    frame[3] = (uint8_t)(crc & 0xFFu);
+    frame[4] = (uint8_t)(crc >> 8);
+    UartDma_SendModbus(frame, 5);
+}
+
+/* -------------------------------------------------------------------------
+   FC03 — Read Holding Registers
+   ------------------------------------------------------------------------- */
+static void handle_fc03(const uint8_t *req)
+{
+    uint16_t start = ((uint16_t)req[2] << 8) | req[3];
+    uint16_t count = ((uint16_t)req[4] << 8) | req[5];
+
+    if (count == 0 || count > 125u || (start + count) > MB_REG_COUNT) {
+        send_exception(MB_FC_READ, 0x02);
+        return;
+    }
+
+    /* Response: [addr][fc][byte_count][data...][crc_lo][crc_hi] */
+    uint8_t resp[3 + 250 + 2];
+    resp[0] = MB_ADDR;
+    resp[1] = MB_FC_READ;
+    resp[2] = (uint8_t)(count * 2u);
+    for (uint16_t i = 0; i < count; i++) {
+        uint16_t v   = s_regs[start + i];
+        resp[3 + i*2]     = (uint8_t)(v >> 8);
+        resp[3 + i*2 + 1] = (uint8_t)(v & 0xFFu);
+    }
+    uint16_t len = 3u + count * 2u;
+    uint16_t crc = crc16(resp, len);
+    resp[len]     = (uint8_t)(crc & 0xFFu);
+    resp[len + 1] = (uint8_t)(crc >> 8);
+    UartDma_SendModbus(resp, len + 2u);
+}
+
+/* -------------------------------------------------------------------------
+   Apply a single register write to system state
+   ------------------------------------------------------------------------- */
+static void apply_reg_write(uint8_t addr, uint16_t val)
+{
+    if (addr >= MB_REG_COUNT) return;
+    s_regs[addr] = val;
+
+    /* Interpret side effects */
+    switch (addr) {
+    case 0x00:
+        /* Heartbeat reply from PC */
+        if (val == HB_HI) {
+            s_hb_pending         = false;
+            g_robot.comms.heartbeat = HB_HI;
+        }
+        break;
+
+    case 0x02:
+        /* Manual gripper command */
+        if (val & 0x01u) Gripper_SetVertical(false);  /* Down */
+        else if (val == 0u) Gripper_SetVertical(true); /* Up  */
+        if (val & 0x02u) Gripper_SetClaw(true);       /* Open  */
+        if (val & 0x04u) Gripper_SetClaw(false);      /* Close */
+        break;
+
+    default:
+        break;
+    }
+}
+
+/* -------------------------------------------------------------------------
+   FC06 — Write Single Register
+   ------------------------------------------------------------------------- */
+static void handle_fc06(const uint8_t *req, uint16_t len)
+{
+    if (len < 8) return;
+    uint16_t addr = ((uint16_t)req[2] << 8) | req[3];
+    uint16_t val  = ((uint16_t)req[4] << 8) | req[5];
+
+    apply_reg_write((uint8_t)addr, val);
+
+    /* Echo the request as response */
+    UartDma_SendModbus(req, 8);
+}
+
+/* -------------------------------------------------------------------------
+   FC16 — Write Multiple Registers
+   ------------------------------------------------------------------------- */
+static void handle_fc16(const uint8_t *req, uint16_t len)
+{
+    if (len < 9) return;
+    uint16_t start = ((uint16_t)req[2] << 8) | req[3];
+    uint16_t count = ((uint16_t)req[4] << 8) | req[5];
+    uint8_t  bytes = req[6];
+
+    if (bytes != count * 2u || (start + count) > MB_REG_COUNT) {
+        send_exception(MB_FC_WRITEN, 0x02);
+        return;
+    }
+
+    for (uint16_t i = 0; i < count; i++) {
+        uint16_t val = ((uint16_t)req[7 + i*2] << 8) | req[7 + i*2 + 1];
+        apply_reg_write((uint8_t)(start + i), val);
+    }
+
+    /* Response: [addr][fc][start_hi][start_lo][count_hi][count_lo][crc] */
+    uint8_t resp[8];
+    resp[0] = MB_ADDR;
+    resp[1] = MB_FC_WRITEN;
+    resp[2] = req[2]; resp[3] = req[3];
+    resp[4] = req[4]; resp[5] = req[5];
+    uint16_t crc = crc16(resp, 6);
+    resp[6] = (uint8_t)(crc & 0xFFu);
+    resp[7] = (uint8_t)(crc >> 8);
+    UartDma_SendModbus(resp, 8);
+}
+
+/* -------------------------------------------------------------------------
+   RX callback — called by uart_dma_manager on LPUART1 IDLE
+   ------------------------------------------------------------------------- */
+static void on_rx(const uint8_t *data, uint16_t len)
+{
+    if (len < MB_MIN_FRAME) return;
+    if (data[0] != MB_ADDR) return;
+
+    /* Verify CRC */
+    uint16_t crc_recv = ((uint16_t)data[len-1] << 8) | data[len-2];
+    if (crc16(data, len - 2u) != crc_recv) return;
+
+    switch (data[1]) {
+    case MB_FC_READ:   if (len >= 8) handle_fc03(data); break;
+    case MB_FC_WRITE1: handle_fc06(data, len);           break;
+    case MB_FC_WRITEN: handle_fc16(data, len);           break;
+    default:           send_exception(data[1], 0x01);   break;
+    }
+
+    g_robot.comms.last_rx_len = len;
+}
+
+/* -------------------------------------------------------------------------
+   Public API
+   ------------------------------------------------------------------------- */
+void ModbusBridge_Init(void)
+{
+    memset(s_regs, 0, sizeof(s_regs));
+    s_hb_tick    = 0;
+    s_hb_pending = false;
+    UartDma_SetLpuartRxCb(on_rx);
+}
+
+uint16_t ModbusBridge_GetReg(uint8_t addr)
+{
+    return (addr < MB_REG_COUNT) ? s_regs[addr] : 0u;
+}
+
+void ModbusBridge_SetReg(uint8_t addr, uint16_t val)
+{
+    if (addr < MB_REG_COUNT) s_regs[addr] = val;
+}
+
+void ModbusBridge_Tick(void)
+{
+    /* --- Heartbeat: send YA every 200 ms --------------------------------- */
+    uint32_t now = HAL_GetTick();
+    if (!s_hb_pending && (now - s_hb_tick >= HB_PERIOD_MS)) {
+        s_hb_tick    = now;
+        s_hb_pending = true;
+        s_regs[0x00] = HB_YA;
+        g_robot.comms.heartbeat = HB_YA;
+    }
+
+    /* --- Refresh read registers from g_robot ----------------------------- */
+    /* 0x26 — Reed sensors: bit0=Up, bit1=Down, bit2=Jaw(close)            */
+    uint16_t reeds = 0;
+    if (HwIo_GetReedSwitch(REED_UP))    reeds |= 0x01u;
+    if (HwIo_GetReedSwitch(REED_DOWN))  reeds |= 0x02u;
+    if (HwIo_GetReedSwitch(REED_CLOSE)) reeds |= 0x04u;
+    s_regs[0x26] = reeds;
+
+    /* 0x27 — Task (managed by app_main via SetReg) — no update here       */
+
+    /* 0x28–0x30 — Position / Velocity / Acceleration in deg × 10          */
+    float pos_rad  = MotorCtrl_GetPosition_rad();
+    float vel_rads = g_robot.motion.velocity_rps * (2.0f * 3.14159265f);
+    float acc_rads = g_robot.motion.accel_rps2   * (2.0f * 3.14159265f);
+    float pos_deg  = pos_rad * (180.0f / 3.14159265f);
+
+    s_regs[0x28] = (uint16_t)(int16_t)(pos_deg  * 10.0f);
+    s_regs[0x29] = (uint16_t)(int16_t)(vel_rads * (180.0f / 3.14159265f) * 10.0f);
+    s_regs[0x30] = (uint16_t)(int16_t)(acc_rads * (180.0f / 3.14159265f) * 10.0f);
+
+    /* 0x31 — Emergency: bit0 = E-stop active                              */
+    s_regs[0x31] = g_robot.sensors.estop ? 0x0001u : 0x0000u;
+}

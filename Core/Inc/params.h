@@ -104,6 +104,16 @@
 #define MODBUS_T35_DELAY_MS     2u
 
 /* --- Homing ----------------------------------------------------------------*/
-#define HOMING_SPEED_PWM        6       /* slow creep ≈ 2.9 V, well under MOTOR_VOLT_LIMIT_PWM */
+#define HOMING_SPEED_PWM        6       /* legacy PWM reference — not used by controller      */
+#define HOMING_VEL_RADS         2.0f    /* creep velocity for edge search (rad/s)             */
+#define HOMING_ACCEL_RADS2      3.0f    /* velocity ramp rate during homing (rad/s²)          */
+#define HOMING_WIGGLE_STEP_DEG  5.0f    /* amplitude increment per wiggle step (degrees)      */
+#define HOMING_WIGGLE_MAX_DEG   90.0f   /* max search range from start before FAULT           */
+#define HOMING_SETTLE_MS        300u    /* ms to wait after reaching a wiggle target          */
+
+/* --- Pick & Place ---------------------------------------------------------*/
+#define P2P_INDEX_COUNT         10u     /* number of configurable index positions             */
+/* Home offset Modbus register (writable by PC, outside base-system range)   */
+#define MODBUS_REG_HOME_OFFSET  0x32u
 
 #endif /* __PARAMS_H */

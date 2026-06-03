@@ -1,6 +1,7 @@
 #ifndef __MOTOR_CONTROLLER_H
 #define __MOTOR_CONTROLLER_H
 
+#include <stdint.h>
 #include <stdbool.h>
 
 /* Motor controller — cascade PID with feedforward, S-curve trajectory,
@@ -17,5 +18,8 @@ void  MotorCtrl_SetTarget(float target_rad);
 void  MotorCtrl_Stop(void);
 bool  MotorCtrl_IsAtTarget(void);
 float MotorCtrl_GetPosition_rad(void);
+/* Homing helpers */
+void  MotorCtrl_HomingCreep(int8_t dir);   /* constant-vel creep: +1=fwd, -1=rev */
+void  MotorCtrl_Zero(float home_offset_rad); /* redefine current pos as home+offset */
 
 #endif /* __MOTOR_CONTROLLER_H */

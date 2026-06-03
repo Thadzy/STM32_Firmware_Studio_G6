@@ -114,7 +114,7 @@ All values hardware-measured / system-identified. **Never change without asking 
 - [x] Phase 1 — `params.h`, `hw_io.h/.c`
 - [x] Phase 2 — `uart_dma_manager.h/.c`
 - [x] Phase 3 — `kalman.h/.c`, `motor_controller.h/.c`
-- [ ] Phase 4 — `modbus_bridge.h/.c`, `app_main.h/.c`
+- [x] Phase 4 — `modbus_bridge.h/.c`, `app_main.h/.c`
 - [x] Phase 5 — `stm32g4xx_it.c` TIM6 ISR hook (added during Phase 3)
 - [ ] Phase 6 — `main.c` USER CODE (App_Init / App_Run calls)
 - [ ] Phase 7 — `PC_Backend/serial_bridge.py`

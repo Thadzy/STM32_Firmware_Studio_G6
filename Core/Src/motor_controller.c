@@ -42,6 +42,10 @@ static uint16_t      s_last_enc;
 static volatile float s_vel_sp;
 static volatile float s_acc_sp;
 
+/* Homing creep mode — bypasses S-curve and position PID */
+static volatile bool  s_homing_mode;
+static volatile float s_homing_vel;
+
 /* Speed PID state */
 static float s_spd_integral;
 static float s_spd_prev_err;
@@ -161,10 +165,11 @@ void MotorCtrl_Init(void)
 
 void MotorCtrl_SetTarget(float target_rad)
 {
-    s_sc.target = target_rad;
-    s_sc.done   = false;
+    s_homing_mode  = false;
+    s_sc.target    = target_rad;
+    s_sc.done      = false;
     s_settle_ticks = 0;
-    s_running   = true;
+    s_running      = true;
 }
 
 void MotorCtrl_Stop(void)
@@ -186,6 +191,35 @@ bool MotorCtrl_IsAtTarget(void)
 float MotorCtrl_GetPosition_rad(void)
 {
     return s_kalman.x[0];
+}
+
+void MotorCtrl_HomingCreep(int8_t dir)
+{
+    s_homing_mode = true;
+    s_homing_vel  = (dir >= 0) ? HOMING_VEL_RADS : -HOMING_VEL_RADS;
+    s_running     = true;
+}
+
+void MotorCtrl_Zero(float home_offset_rad)
+{
+    /* Redefine the current physical position as home + offset.
+       All PID/Kalman state is re-seeded from the new origin.                */
+    s_homing_mode  = false;
+    s_pos_counts   = (int32_t)(home_offset_rad * RAD_TO_COUNTS);
+    Kalman_Init(&s_kalman, home_offset_rad);
+    s_sc.pos       = home_offset_rad;
+    s_sc.vel       = 0.0f;
+    s_sc.acc       = 0.0f;
+    s_sc.target    = home_offset_rad;
+    s_sc.done      = true;
+    s_pos_integral = 0.0f;
+    s_spd_integral = 0.0f;
+    s_vel_sp       = 0.0f;
+    s_acc_sp       = 0.0f;
+    s_running      = false;
+
+    /* Pre-fill ZVD buffer with new position */
+    for (uint8_t i = 0; i < ZVD_BUF_SIZE; i++) s_zvd_buf[i] = home_offset_rad;
 }
 
 /* -------------------------------------------------------------------------
@@ -288,6 +322,18 @@ void MotorCtrl_Tick100Hz(void)
         if (s_settle_ticks < 0xFFFFu) s_settle_ticks++;
     } else {
         s_settle_ticks = 0;
+    }
+
+    /* --- Homing creep override — bypasses S-curve and position PID ------- */
+    if (s_homing_mode) {
+        /* Ramp toward target velocity — never step-change to avoid harsh reversals */
+        float ramp = HOMING_ACCEL_RADS2 * DT_OUTER;
+        if (s_vel_sp < s_homing_vel)
+            s_vel_sp = (s_vel_sp + ramp < s_homing_vel) ? s_vel_sp + ramp : s_homing_vel;
+        else if (s_vel_sp > s_homing_vel)
+            s_vel_sp = (s_vel_sp - ramp > s_homing_vel) ? s_vel_sp - ramp : s_homing_vel;
+        s_acc_sp = 0.0f;
+        return;
     }
 
     /* --- 4. Outer position PID (derivative on measurement) --------------- */
