@@ -223,11 +223,12 @@ void ModbusBridge_Tick(void)
     }
 
     /* --- Refresh read registers from g_robot ----------------------------- */
-    /* 0x26 — Reed sensors: bit0=Up, bit1=Down, bit2=Jaw(close)            */
+    /* 0x26 — bit0=ReedUp, bit1=ReedDown, bit2=ReedClose, bit3=Proximity   */
     uint16_t reeds = 0;
     if (HwIo_GetReedSwitch(REED_UP))    reeds |= 0x01u;
     if (HwIo_GetReedSwitch(REED_DOWN))  reeds |= 0x02u;
     if (HwIo_GetReedSwitch(REED_CLOSE)) reeds |= 0x04u;
+    if (HwIo_GetProximity())            reeds |= 0x08u;
     s_regs[0x26] = reeds;
 
     /* 0x27 — Task (managed by app_main via SetReg) — no update here       */
@@ -242,6 +243,7 @@ void ModbusBridge_Tick(void)
     s_regs[0x29] = (uint16_t)(int16_t)(vel_rads * (180.0f / 3.14159265f) * 10.0f);
     s_regs[0x30] = (uint16_t)(int16_t)(acc_rads * (180.0f / 3.14159265f) * 10.0f);
 
-    /* 0x31 — Emergency: bit0 = E-stop active                              */
-    s_regs[0x31] = g_robot.sensors.estop ? 0x0001u : 0x0000u;
+    /* 0x31 — Emergency: bit0=estop, bits15-8=fault_code (for diagnostics)  */
+    s_regs[0x31] = (g_robot.sensors.estop ? 0x0001u : 0x0000u)
+                 | ((uint16_t)g_robot.comms.fault_code << 8);
 }

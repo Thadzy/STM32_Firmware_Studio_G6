@@ -56,7 +56,7 @@
 /* --- PID Gains — Position loop (outer, 100 Hz) -----------------------------*/
 #define PID_POS_KP              3.0f
 #define PID_POS_KI              0.02f
-#define PID_POS_KD              0.01f
+#define PID_POS_KD              0.15f
 #define PID_POS_IMAX            100.0f  /* integral clamp (rad)               */
 
 /* --- Feedforward Gains -----------------------------------------------------*/
@@ -108,11 +108,13 @@
 #define HOMING_VEL_RADS         0.8f    /* creep velocity for edge search (rad/s) ~46 deg/s   */
 #define HOMING_ACCEL_RADS2      2.0f    /* velocity ramp rate during homing (rad/s²)          */
 #define HOMING_WIGGLE_STEP_DEG  10.0f   /* amplitude increment per wiggle step (degrees)      */
-#define HOMING_WIGGLE_MAX_DEG   90.0f   /* max search range from start before FAULT           */
-#define HOMING_OVERSHOOT_DEG         5.0f   /* deg past edge A before reversing to find edge B    */
-#define HOMING_MAX_SEARCH_DEG        20.0f  /* max deg to travel in FIND_EDGE_B before fault      */
+#define HOMING_WIGGLE_MAX_DEG   180.0f  /* max search range from start before FAULT            */
+#define HOMING_OVERSHOOT_DEG         5.0f   /* min deg past edge A before even checking for clear  */
+#define HOMING_OVERSHOOT_MAX_DEG    45.0f   /* abort if sensor never clears within this travel     */
+#define HOMING_MAX_SEARCH_DEG        40.0f  /* max deg to travel in FIND_EDGE_B before fault       */
 #define HOMING_CENTER_TIMEOUT_MS     30000u /* ms cap on GO_CENTER — proceeds to SETTLE regardless */
 #define HOMING_SETTLE_MS        1000u   /* ms to wait after reaching center before zeroing    */
+#define MOVE_TIMEOUT_MS         10000u  /* ms — jog/P2P abort to IDLE if IsAtTarget not met   */
 
 /* --- Pick & Place ---------------------------------------------------------*/
 #define P2P_INDEX_COUNT         10u     /* number of configurable index positions             */

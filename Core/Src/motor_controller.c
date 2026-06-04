@@ -321,11 +321,11 @@ void MotorCtrl_Tick1kHz(void)
             + PID_SPEED_KD  * der
             + u_ff;
 
-    /* Clamp and apply */
+    /* Clamp and apply — round (not truncate) so sub-1 values reach motor */
     if (u >  (float)MOTOR_PWM_MAX) u =  (float)MOTOR_PWM_MAX;
     if (u < -(float)MOTOR_PWM_MAX) u = -(float)MOTOR_PWM_MAX;
 
-    int16_t pwm = (int16_t)u;
+    int16_t pwm = (int16_t)lroundf(u);
     g_robot.motion.motor_pwm = pwm;
     Motor_SetPWM(pwm);
 }

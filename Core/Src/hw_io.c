@@ -90,9 +90,9 @@ void HwIo_Poll100Hz(void)
     debounce_update(&s_reed[REED_CLOSE],
         HAL_GPIO_ReadPin(Reed_Close_GPIO_Port, Reed_Close_Pin) == GPIO_PIN_SET);
 
-    /* Proximity sensor: active LOW (PULLUP on PB9) */
+    /* Proximity sensor: active HIGH (PNP output on PB9) */
     debounce_update(&s_proximity,
-        HAL_GPIO_ReadPin(Proximity_Sensor_GPIO_Port, Proximity_Sensor_Pin) == GPIO_PIN_RESET);
+        HAL_GPIO_ReadPin(Proximity_Sensor_GPIO_Port, Proximity_Sensor_Pin) == GPIO_PIN_SET);
 
     /* Rising-edge latch — set here at 100 Hz so App_Run never misses an edge */
     if (s_proximity.state && !s_prox_prev_isr) s_prox_latch = true;

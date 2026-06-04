@@ -59,6 +59,8 @@ static uint32_t s_center_start_ms; /* HAL_GetTick when GO_CENTER begins — for 
 static float    s_home_offset_rad;
 static float    s_user_home_rad;    /* park position saved by SetHome (post-calibration frame) */
 static int8_t   s_go_center_dir;    /* tracks last dir in HOM_GO_CENTER — avoids repeated HomingCreep calls */
+static uint32_t s_move_start_ms;   /* HAL_GetTick() when STATE_RUNNING was entered — move timeout ref */
+static uint32_t s_tel_tick;        /* last $ST telemetry send time */
 
 /* =========================================================================
    Running-mode sub-state
@@ -162,7 +164,7 @@ static void homing_run(void)
 
                 if (s_sweep_amp_rad > deg_to_rad(HOMING_WIGGLE_MAX_DEG)) {
                     g_robot.fsm              = STATE_FAULT;
-                    g_robot.comms.fault_code = 1u; /* sensor not found     */
+                    g_robot.comms.fault_code = 4u; /* sensor not found in sweep */
                     MotorCtrl_Stop();
                     break;
                 }
@@ -180,16 +182,25 @@ static void homing_run(void)
 
     /* ------------------------------------------------------------------ */
     case HOM_OVERSHOOT:
-        /* Continue past edge A in sweep direction until sensor is cleared */
+        /* Continue past edge A until the sensor physically clears (prox OFF).
+           A fixed 5-deg stop is not enough when the sensor window is wider
+           than HOMING_OVERSHOOT_DEG — the motor would reverse while still
+           inside the zone, exit from the wrong side (A), and never find B.  */
         {
             float past = (pos - s_edge_a) * (float)s_sweep_dir;
-            if (past >= deg_to_rad(HOMING_OVERSHOOT_DEG)) {
+            if (past >= deg_to_rad(HOMING_OVERSHOOT_DEG) && !HwIo_GetProximity()) {
+                /* Sensor cleared — motor is now beyond the far edge of zone  */
                 s_sweep_dir = -s_sweep_dir;
                 MotorCtrl_HomingCreep(s_sweep_dir);
-                (void)HwIo_GetProxRisingEdge();   /* flush latch — zone may have fired during overshoot */
+                (void)HwIo_GetProxRisingEdge();   /* flush latch */
                 s_search_start_rad = pos;
                 hom_dbg("OVS", rad_to_deg(s_edge_a), rad_to_deg(pos), rad_to_deg(pos));
                 s_hom = HOM_FIND_EDGE_B;
+            } else if (past > deg_to_rad(HOMING_OVERSHOOT_MAX_DEG)) {
+                /* Sensor never went OFF — zone too wide or sensor stuck ON   */
+                g_robot.fsm              = STATE_FAULT;
+                g_robot.comms.fault_code = 3u;
+                MotorCtrl_Stop();
             }
         }
         break;
@@ -250,9 +261,10 @@ static void homing_run(void)
             MotorCtrl_Zero(s_home_offset_rad);
             MotorCtrl_SetTarget(s_user_home_rad);
         }
-        s_hom       = HOM_IDLE;
-        g_robot.fsm = STATE_RUNNING;
-        s_run_mode  = RUN_POINT;
+        s_hom           = HOM_IDLE;
+        s_move_start_ms = HAL_GetTick();
+        g_robot.fsm     = STATE_RUNNING;
+        s_run_mode      = RUN_POINT;
         set_task(0x0008);   /* GoPoint — drive to park position */
         break;
 
@@ -276,7 +288,7 @@ static void auto_run(void)
         return;
     }
 
-    if (!MotorCtrl_IsAtTarget()) return; /* wait to arrive                  */
+    if (s_seq_step > 0u && !MotorCtrl_IsAtTarget()) return; /* wait for previous move */
 
     uint8_t pair  = s_seq_step / 2u;
     bool    pick  = (s_seq_step & 1u) == 0u;
@@ -323,26 +335,29 @@ static void fsm_run(void)
             s_hom       = HOM_INIT;
             set_task(0x0001);
         } else if (mode_reg & 0x02u) {                  /* Jog              */
-            ModbusBridge_SetReg(0x01, 0);
             int16_t step_raw = (int16_t)ModbusBridge_GetReg(0x05);
             if (step_raw != 0) {
+                ModbusBridge_SetReg(0x01, 0); /* only consume mode when step is ready */
                 float cur = MotorCtrl_GetPosition_rad();
                 MotorCtrl_SetTarget(cur + deg_to_rad((float)step_raw));
                 set_task(0x0008); /* GoPoint */
+                s_move_start_ms = HAL_GetTick();
                 g_robot.fsm = STATE_RUNNING;
                 s_run_mode  = RUN_JOG;
             }
         } else if (mode_reg & 0x04u) {                  /* Auto             */
-            ModbusBridge_SetReg(0x01, 0);
-            s_seq_pairs = (uint8_t)ModbusBridge_GetReg(0x22);
-            if (s_seq_pairs > 8u) s_seq_pairs = 8u;   /* cap to available register range */
-            s_gripper_en = (ModbusBridge_GetReg(0x04) & 0x01u) != 0u;
-            for (uint8_t i = 0; i < 16u; i++) {
-                s_seq_slots[i] = (int16_t)ModbusBridge_GetReg(0x12u + i);
+            uint8_t pairs = (uint8_t)ModbusBridge_GetReg(0x22);
+            if (pairs > 0u) {
+                ModbusBridge_SetReg(0x01, 0); /* only consume mode when sequence is ready */
+                s_seq_pairs  = (pairs > 8u) ? 8u : pairs;
+                s_gripper_en = (ModbusBridge_GetReg(0x04) & 0x01u) != 0u;
+                for (uint8_t i = 0; i < 16u; i++) {
+                    s_seq_slots[i] = (int16_t)ModbusBridge_GetReg(0x12u + i);
+                }
+                s_seq_step  = 0;
+                g_robot.fsm = STATE_RUNNING;
+                s_run_mode  = RUN_AUTO;
             }
-            s_seq_step  = 0;
-            g_robot.fsm = STATE_RUNNING;
-            s_run_mode  = RUN_AUTO;
         } else if (mode_reg & 0x08u) {                  /* SetHome          */
             ModbusBridge_SetReg(0x01, 0);
             s_user_home_rad = MotorCtrl_GetPosition_rad();
@@ -363,6 +378,7 @@ static void fsm_run(void)
                 ModbusBridge_SetReg(0x24, 0);
                 MotorCtrl_SetTarget(resolve_target(p2p_tgt, p2p_unit));
                 set_task(0x0008); /* GoPoint */
+                s_move_start_ms = HAL_GetTick();
                 g_robot.fsm = STATE_RUNNING;
                 s_run_mode  = RUN_POINT;
             }
@@ -385,6 +401,11 @@ static void fsm_run(void)
         case RUN_JOG:
         case RUN_POINT:
             if (MotorCtrl_IsAtTarget()) {
+                g_robot.fsm = STATE_IDLE;
+                s_run_mode  = RUN_IDLE;
+                set_task(0x0000);
+            } else if ((HAL_GetTick() - s_move_start_ms) >= MOVE_TIMEOUT_MS) {
+                MotorCtrl_Stop();
                 g_robot.fsm = STATE_IDLE;
                 s_run_mode  = RUN_IDLE;
                 set_task(0x0000);
@@ -429,6 +450,9 @@ void App_Init(void)
 void App_Run(void)
 {
     /* Poll sensors into g_robot (non-ISR sensors) */
+    /* E-stop disabled: NC switch grounds PA5 when unpressed — fix wiring
+       before re-enabling. Wire NO contact to PA5 (HIGH=safe, LOW=stop).  */
+    g_robot.sensors.estop         = false;
     g_robot.sensors.selected_mode = HwIo_GetSelectedMode();
     g_robot.sensors.reset_btn     = HwIo_GetResetBtn();
     g_robot.sensors.proximity     = HwIo_GetProximity();
@@ -441,4 +465,15 @@ void App_Run(void)
 
     /* Run main FSM */
     fsm_run();
+
+    /* Periodic FSM state telemetry every 2 s for debug.
+       Format: $ST,<FsmState_t>,<RunMode_t>  (0=INIT,1=HOMING,2=IDLE,3=RUNNING,4=FAULT) */
+    uint32_t now = HAL_GetTick();
+    if (now - s_tel_tick >= 2000u) {
+        s_tel_tick = now;
+        snprintf(s_dbg, sizeof(s_dbg), "$ST,%d,%d,%d\r\n",
+                 (int)g_robot.fsm, (int)s_run_mode,
+                 (int)g_robot.comms.fault_code);
+        UartDma_SendTelemetry(s_dbg);
+    }
 }
