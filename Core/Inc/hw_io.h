@@ -22,6 +22,7 @@ void  HwIo_Poll100Hz(void);
 bool  HwIo_GetEStop(void);                  /* true = E-Stop active (debounced) */
 bool  HwIo_GetReedSwitch(ReedSwitch_t sw);  /* true = magnet detected (debounced) */
 bool  HwIo_GetProximity(void);              /* true = object detected (debounced) */
+bool  HwIo_GetProxRisingEdge(void);        /* true once per rising edge, latched at 100 Hz; clears on read */
 bool  HwIo_GetResetBtn(void);               /* true = button pressed (debounced) */
 bool  HwIo_GetSelectedMode(void);           /* true = mode switch active */
 

@@ -22,6 +22,10 @@ static Debounce_t s_reed[REED_COUNT];
 static Debounce_t s_proximity;
 static Debounce_t s_reset_btn;
 
+/* Rising-edge latch: set in Poll100Hz (ISR), cleared by HwIo_GetProxRisingEdge */
+static bool              s_prox_prev_isr  = false;
+static volatile bool     s_prox_latch     = false;
+
 /* ---- Private helpers -----------------------------------------------------*/
 
 static void debounce_update(Debounce_t *d, bool raw)
@@ -90,6 +94,10 @@ void HwIo_Poll100Hz(void)
     debounce_update(&s_proximity,
         HAL_GPIO_ReadPin(Proximity_Sensor_GPIO_Port, Proximity_Sensor_Pin) == GPIO_PIN_RESET);
 
+    /* Rising-edge latch — set here at 100 Hz so App_Run never misses an edge */
+    if (s_proximity.state && !s_prox_prev_isr) s_prox_latch = true;
+    s_prox_prev_isr = s_proximity.state;
+
     /* Reset button: active LOW (PULLUP on PA7) */
     debounce_update(&s_reset_btn,
         HAL_GPIO_ReadPin(Reset_Btn_GPIO_Port, Reset_Btn_Pin) == GPIO_PIN_RESET);
@@ -101,6 +109,12 @@ bool HwIo_GetEStop(void)                 { return s_estop_active; }
 bool HwIo_GetReedSwitch(ReedSwitch_t sw) { return s_reed[sw].state; }
 bool HwIo_GetProximity(void)             { return s_proximity.state; }
 bool HwIo_GetResetBtn(void)              { return s_reset_btn.state; }
+
+bool HwIo_GetProxRisingEdge(void)
+{
+    if (s_prox_latch) { s_prox_latch = false; return true; }
+    return false;
+}
 
 bool HwIo_GetSelectedMode(void)
 {

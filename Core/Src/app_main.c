@@ -8,6 +8,7 @@
 #include "main.h"
 #include <math.h>
 #include <string.h>
+#include <stdio.h>
 
 extern TIM_HandleTypeDef htim6;
 
@@ -30,29 +31,33 @@ static float g_idx_deg[P2P_INDEX_COUNT] = {
    Motion law: ALWAYS HomingCreep (HOMING_VEL_RADS). Never S-curve during home.
 
    Sequence:
-     SWEEP      — triangular sweep with growing amplitude until sensor fires
-     FIND_EDGE_B — continue same direction at creep until sensor turns OFF
-     GO_CENTER  — creep toward (EdgeA + EdgeB) / 2
+     SWEEP      — triangular sweep with growing amplitude until sensor fires (rising edge = A)
+     OVERSHOOT  — continue HOMING_OVERSHOOT_DEG past edge A to guarantee sensor is cleared
+     FIND_EDGE_B — reverse; rising edge from other side = edge B
+     GO_CENTER  — creep to (A + B) / 2; timeout after HOMING_CENTER_TIMEOUT_MS
      SETTLE     — hold still for HOMING_SETTLE_MS then zero
    ========================================================================= */
 typedef enum {
     HOM_IDLE = 0,
     HOM_INIT,
-    HOM_SWEEP,        /* growing-amplitude oscillation searching for sensor  */
-    HOM_FIND_EDGE_B,  /* sensor ON → keep going to find OFF (edge B)         */
-    HOM_GO_CENTER,    /* creep to (EdgeA + EdgeB) / 2                        */
-    HOM_SETTLE,       /* wait for arm to stop, then zero                     */
+    HOM_SWEEP,        /* growing-amplitude sweep until sensor ON = edge A    */
+    HOM_OVERSHOOT,    /* continue past edge A to clear the sensor            */
+    HOM_FIND_EDGE_B,  /* reversed — rising edge from other side = edge B     */
+    HOM_GO_CENTER,    /* creep to (A + B) / 2                                */
+    HOM_SETTLE,       /* wait HOMING_SETTLE_MS then zero                     */
 } HomingState_t;
 
 static HomingState_t s_hom;
 static float    s_sweep_start_rad;  /* position at start of current half-cycle */
 static int8_t   s_sweep_dir;        /* +1 = forward, -1 = reverse              */
 static float    s_sweep_amp_rad;    /* current half-cycle amplitude             */
-static float    s_edge_a;           /* position where proximity turned ON       */
-static float    s_edge_b;           /* position where proximity turned OFF      */
-static bool     s_prox_prev;
+static float    s_edge_a;           /* rising edge entering sensor from sweep direction       */
+static float    s_edge_b;           /* rising edge entering sensor from opposite direction    */
+static float    s_search_start_rad; /* position when FIND_EDGE_B begins (for safety limit)   */
 static uint32_t s_settle_t;
+static uint32_t s_center_start_ms; /* HAL_GetTick when GO_CENTER begins — for timeout        */
 static float    s_home_offset_rad;
+static float    s_user_home_rad;    /* park position saved by SetHome (post-calibration frame) */
 static int8_t   s_go_center_dir;    /* tracks last dir in HOM_GO_CENTER — avoids repeated HomingCreep calls */
 
 /* =========================================================================
@@ -79,6 +84,20 @@ static bool     s_gripper_en;  /* gripper enabled in auto (reg 0x04)        */
    ========================================================================= */
 
 static float deg_to_rad(float d) { return d * (M_PI / 180.0f); }
+static float rad_to_deg(float r) { return r * (180.0f / M_PI); }
+
+static char s_dbg[80];
+/* newlib-nano disables %f — values encoded as integer×100, Python decodes.
+   Format: $HOM,TAG,v1x100,v2x100,POS,posx100                             */
+static void hom_dbg(const char *tag, float val1, float val2, float pos_deg)
+{
+    snprintf(s_dbg, sizeof(s_dbg), "$HOM,%s,%ld,%ld,POS,%ld\r\n",
+             tag,
+             (long)lroundf(val1 * 100.0f),
+             (long)lroundf(val2 * 100.0f),
+             (long)lroundf(pos_deg * 100.0f));
+    UartDma_SendTelemetry(s_dbg);
+}
 
 /* Resolve P2P target to radians given unit and signed raw value             */
 static float resolve_target(int16_t raw, uint16_t unit)
@@ -106,7 +125,6 @@ static void set_task(uint16_t task_bits)
    ========================================================================= */
 static void homing_run(void)
 {
-    bool     prox = HwIo_GetProximity();
     float    pos  = MotorCtrl_GetPosition_rad();
     uint32_t now  = HAL_GetTick();
 
@@ -119,17 +137,13 @@ static void homing_run(void)
         s_sweep_amp_rad   = deg_to_rad(HOMING_WIGGLE_STEP_DEG); /* first step */
         s_edge_a          = 0.0f;
         s_edge_b          = 0.0f;
-        s_prox_prev       = prox;
+        (void)HwIo_GetProxRisingEdge();   /* flush any stale latch from before homing */
 
-        if (prox) {
-            /* Already inside zone — creep forward to catch the OFF edge   */
-            MotorCtrl_HomingCreep(+1);
-            s_edge_a = pos;             /* treat current pos as edge A     */
-            s_hom    = HOM_FIND_EDGE_B;
-        } else {
-            MotorCtrl_HomingCreep(s_sweep_dir);
-            s_hom = HOM_SWEEP;
-        }
+        /* Whether inside or outside the zone, always start the sweep.
+           If inside, the sweep exits first then catches the proper rising
+           edge on re-entry — giving a real edge A, not just parked position. */
+        MotorCtrl_HomingCreep(s_sweep_dir);
+        s_hom = HOM_SWEEP;
         break;
 
     /* ------------------------------------------------------------------ */
@@ -156,9 +170,25 @@ static void homing_run(void)
             }
 
             /* Rising edge — proximity just turned ON → edge A found       */
-            if (!s_prox_prev && prox) {
+            if (HwIo_GetProxRisingEdge()) {
                 s_edge_a = pos;
-                /* Keep same direction at same slow speed to find edge B   */
+                hom_dbg("EA1", rad_to_deg(pos), rad_to_deg(s_sweep_amp_rad), rad_to_deg(pos));
+                s_hom = HOM_OVERSHOOT;
+            }
+        }
+        break;
+
+    /* ------------------------------------------------------------------ */
+    case HOM_OVERSHOOT:
+        /* Continue past edge A in sweep direction until sensor is cleared */
+        {
+            float past = (pos - s_edge_a) * (float)s_sweep_dir;
+            if (past >= deg_to_rad(HOMING_OVERSHOOT_DEG)) {
+                s_sweep_dir = -s_sweep_dir;
+                MotorCtrl_HomingCreep(s_sweep_dir);
+                (void)HwIo_GetProxRisingEdge();   /* flush latch — zone may have fired during overshoot */
+                s_search_start_rad = pos;
+                hom_dbg("OVS", rad_to_deg(s_edge_a), rad_to_deg(pos), rad_to_deg(pos));
                 s_hom = HOM_FIND_EDGE_B;
             }
         }
@@ -166,12 +196,21 @@ static void homing_run(void)
 
     /* ------------------------------------------------------------------ */
     case HOM_FIND_EDGE_B:
-        /* Continue creeping in same direction until proximity turns OFF   */
-        if (s_prox_prev && !prox) {
+        /* 100 Hz latch guarantees edge detection even if App_Run is slow  */
+        if (HwIo_GetProxRisingEdge()) {
             s_edge_b = pos;
+            float center = (s_edge_a + s_edge_b) * 0.5f;
+            hom_dbg("EB1", rad_to_deg(s_edge_a), rad_to_deg(s_edge_b), rad_to_deg(pos));
+            hom_dbg("CTR", rad_to_deg(center), rad_to_deg(fabsf(s_edge_b - s_edge_a)), rad_to_deg(pos));
             MotorCtrl_Stop();
-            s_go_center_dir = 0;    /* force first HomingCreep call in GO_CENTER */
+            s_go_center_dir   = 0;
+            s_center_start_ms = now;
             s_hom = HOM_GO_CENTER;
+        } else if (fabsf(pos - s_search_start_rad) > deg_to_rad(HOMING_MAX_SEARCH_DEG)) {
+            /* Safety: edge B not found within search range — fault        */
+            g_robot.fsm              = STATE_FAULT;
+            g_robot.comms.fault_code = 2u;
+            MotorCtrl_Stop();
         }
         break;
 
@@ -179,14 +218,15 @@ static void homing_run(void)
     case HOM_GO_CENTER: {
         float center = (s_edge_a + s_edge_b) * 0.5f;
         float err    = center - pos;
+        bool  close  = fabsf(err) <= deg_to_rad(0.5f);
+        bool  timeout = (now - s_center_start_ms) >= HOMING_CENTER_TIMEOUT_MS;
 
-        if (fabsf(err) <= deg_to_rad(0.5f)) {
+        if (close || timeout) {
             MotorCtrl_Stop();
+            hom_dbg("CEND", rad_to_deg(center), rad_to_deg(err), rad_to_deg(pos));
             s_settle_t = now;
             s_hom      = HOM_SETTLE;
         } else {
-            /* Only call HomingCreep when direction changes — prevents
-               per-iteration calls from toggling velocity and shaking.   */
             int8_t needed = (err > 0.0f) ? +1 : -1;
             if (needed != s_go_center_dir) {
                 s_go_center_dir = needed;
@@ -204,12 +244,16 @@ static void homing_run(void)
         {
             int16_t off_raw   = (int16_t)ModbusBridge_GetReg(MODBUS_REG_HOME_OFFSET);
             s_home_offset_rad = deg_to_rad((float)off_raw);
+            hom_dbg("ZERO", rad_to_deg((s_edge_a + s_edge_b) * 0.5f),
+                    rad_to_deg(s_user_home_rad),
+                    rad_to_deg(MotorCtrl_GetPosition_rad()));
             MotorCtrl_Zero(s_home_offset_rad);
-            MotorCtrl_SetTarget(s_home_offset_rad);
+            MotorCtrl_SetTarget(s_user_home_rad);
         }
         s_hom       = HOM_IDLE;
-        g_robot.fsm = STATE_IDLE;
-        set_task(0x0000);
+        g_robot.fsm = STATE_RUNNING;
+        s_run_mode  = RUN_POINT;
+        set_task(0x0008);   /* GoPoint — drive to park position */
         break;
 
     case HOM_IDLE:
@@ -217,7 +261,6 @@ static void homing_run(void)
         break;
     }
 
-    s_prox_prev = prox;
 }
 
 /* =========================================================================
@@ -302,8 +345,7 @@ static void fsm_run(void)
             s_run_mode  = RUN_AUTO;
         } else if (mode_reg & 0x08u) {                  /* SetHome          */
             ModbusBridge_SetReg(0x01, 0);
-            int16_t off_raw = (int16_t)ModbusBridge_GetReg(MODBUS_REG_HOME_OFFSET);
-            MotorCtrl_Zero(deg_to_rad((float)off_raw));
+            s_user_home_rad = MotorCtrl_GetPosition_rad();
         } else if (mode_reg & 0x10u) {                  /* Test — reserved  */
             ModbusBridge_SetReg(0x01, 0);
         }

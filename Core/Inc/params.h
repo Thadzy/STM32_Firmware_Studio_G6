@@ -105,11 +105,14 @@
 
 /* --- Homing ----------------------------------------------------------------*/
 #define HOMING_SPEED_PWM        6       /* legacy PWM reference — not used by controller      */
-#define HOMING_VEL_RADS         2.0f    /* creep velocity for edge search (rad/s)             */
-#define HOMING_ACCEL_RADS2      3.0f    /* velocity ramp rate during homing (rad/s²)          */
-#define HOMING_WIGGLE_STEP_DEG  5.0f    /* amplitude increment per wiggle step (degrees)      */
+#define HOMING_VEL_RADS         0.8f    /* creep velocity for edge search (rad/s) ~46 deg/s   */
+#define HOMING_ACCEL_RADS2      2.0f    /* velocity ramp rate during homing (rad/s²)          */
+#define HOMING_WIGGLE_STEP_DEG  10.0f   /* amplitude increment per wiggle step (degrees)      */
 #define HOMING_WIGGLE_MAX_DEG   90.0f   /* max search range from start before FAULT           */
-#define HOMING_SETTLE_MS        300u    /* ms to wait after reaching a wiggle target          */
+#define HOMING_OVERSHOOT_DEG         5.0f   /* deg past edge A before reversing to find edge B    */
+#define HOMING_MAX_SEARCH_DEG        20.0f  /* max deg to travel in FIND_EDGE_B before fault      */
+#define HOMING_CENTER_TIMEOUT_MS     30000u /* ms cap on GO_CENTER — proceeds to SETTLE regardless */
+#define HOMING_SETTLE_MS        1000u   /* ms to wait after reaching center before zeroing    */
 
 /* --- Pick & Place ---------------------------------------------------------*/
 #define P2P_INDEX_COUNT         10u     /* number of configurable index positions             */

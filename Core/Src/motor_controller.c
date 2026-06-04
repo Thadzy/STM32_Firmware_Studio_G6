@@ -61,6 +61,7 @@ static uint8_t      s_zvd_head;
 static uint16_t     s_settle_ticks;
 
 static bool s_running;
+static bool s_zvd_bypass;  /* true during homing — no rod, no need for input shaping */
 
 /* -------------------------------------------------------------------------
    S-curve helpers
@@ -200,6 +201,37 @@ void MotorCtrl_HomingCreep(int8_t dir)
     s_running     = true;
 }
 
+bool MotorCtrl_IsAtPosition(void)
+{
+    /* Like IsAtTarget but without the velocity gate.
+       When ZVD is bypassed (homing, no rod) only a short settle is needed.
+       When ZVD is active the full tail (T3+10 ticks) must flush first.    */
+    uint16_t need = s_zvd_bypass ? 5u : (uint16_t)(ZVD_T3_STEPS + 10u);
+    return s_sc.done
+        && s_settle_ticks >= need
+        && fabsf(s_kalman.x[0] - s_sc.target) < POSITION_DEADBAND_RAD;
+}
+
+void MotorCtrl_SyncTrajectory(void)
+{
+    /* Re-seed the S-curve planner from the current Kalman position.
+       Homing creep bypasses S-curve entirely, leaving s_sc stale.
+       Call this before MotorCtrl_SetTarget when exiting homing mode.
+       Also enables ZVD bypass — rod is not attached during homing.   */
+    float pos      = s_kalman.x[0];
+    s_sc.pos       = pos;
+    s_sc.vel       = 0.0f;
+    s_sc.acc       = 0.0f;
+    s_sc.target    = pos;
+    s_sc.done      = true;
+    s_pos_integral = 0.0f;
+    s_spd_integral = 0.0f;
+    s_vel_sp       = 0.0f;
+    s_acc_sp       = 0.0f;
+    s_zvd_bypass   = true;
+    for (uint8_t i = 0; i < ZVD_BUF_SIZE; i++) s_zvd_buf[i] = pos;
+}
+
 void MotorCtrl_Zero(float home_offset_rad)
 {
     /* Redefine the current physical position as home + offset.
@@ -218,7 +250,8 @@ void MotorCtrl_Zero(float home_offset_rad)
     s_acc_sp       = 0.0f;
     s_running      = false;
 
-    /* Pre-fill ZVD buffer with new position */
+    /* Re-enable ZVD and pre-fill buffer — rod will be attached for normal moves */
+    s_zvd_bypass = false;
     for (uint8_t i = 0; i < ZVD_BUF_SIZE; i++) s_zvd_buf[i] = home_offset_rad;
 }
 
@@ -310,11 +343,16 @@ void MotorCtrl_Tick100Hz(void)
     /* --- 2. ZVD input shaper on S-curve position output ------------------ */
     s_zvd_buf[s_zvd_head] = s_sc.pos;
 
-    uint8_t idx_t2 = (s_zvd_head + ZVD_BUF_SIZE - ZVD_T2_STEPS) % ZVD_BUF_SIZE;
-    uint8_t idx_t3 = (s_zvd_head + ZVD_BUF_SIZE - ZVD_T3_STEPS) % ZVD_BUF_SIZE;
-    float shaped = ZVD_A1 * s_zvd_buf[s_zvd_head]
-                 + ZVD_A2 * s_zvd_buf[idx_t2]
-                 + ZVD_A3 * s_zvd_buf[idx_t3];
+    float shaped;
+    if (s_zvd_bypass) {
+        shaped = s_sc.pos;   /* no rod attached — pass S-curve output directly */
+    } else {
+        uint8_t idx_t2 = (s_zvd_head + ZVD_BUF_SIZE - ZVD_T2_STEPS) % ZVD_BUF_SIZE;
+        uint8_t idx_t3 = (s_zvd_head + ZVD_BUF_SIZE - ZVD_T3_STEPS) % ZVD_BUF_SIZE;
+        shaped = ZVD_A1 * s_zvd_buf[s_zvd_head]
+               + ZVD_A2 * s_zvd_buf[idx_t2]
+               + ZVD_A3 * s_zvd_buf[idx_t3];
+    }
     s_zvd_head = (s_zvd_head + 1u) % ZVD_BUF_SIZE;
 
     /* --- 3. Settling counter (ZVD flush after S-curve completes) --------- */
