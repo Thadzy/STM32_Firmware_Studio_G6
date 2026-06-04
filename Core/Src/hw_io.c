@@ -22,6 +22,11 @@ static Debounce_t s_reed[REED_COUNT];
 static Debounce_t s_proximity;
 static Debounce_t s_reset_btn;
 
+/* Mode switch: longer debounce (10 × 10ms = 100ms) to reject relay/button
+   inductive spikes on adjacent GPIO lines.                                  */
+static uint8_t s_mode_count = 0u;
+static bool    s_mode_state = false;
+
 /* Rising-edge latch: set in Poll100Hz (ISR), cleared by HwIo_GetProxRisingEdge */
 static bool              s_prox_prev_isr  = false;
 static volatile bool     s_prox_latch     = false;
@@ -66,6 +71,7 @@ void HwIo_Init(void)
 void HwIo_Poll100Hz(void)
 {
     /* E-Stop: active LOW (PULLUP on PA5).
+       Pressed = contact closes to GND = LOW = active.
        8 consecutive LOW reads = trigger; one HIGH read = immediate clear. */
     if (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_RESET) {
         if (s_estop_count < ESTOP_DEBOUNCE_THRESHOLD) {
@@ -101,11 +107,23 @@ void HwIo_Poll100Hz(void)
     /* Reset button: active LOW (PULLUP on PA7) */
     debounce_update(&s_reset_btn,
         HAL_GPIO_ReadPin(Reset_Btn_GPIO_Port, Reset_Btn_Pin) == GPIO_PIN_RESET);
+
+    /* Mode switch: active LOW (PULLUP on PA6), 100ms hold to reject spikes  */
+    {
+        bool raw = (HAL_GPIO_ReadPin(Selected_Mode_GPIO_Port, Selected_Mode_Pin) == GPIO_PIN_RESET);
+        if (raw == s_mode_state) {
+            s_mode_count = 0u;
+        } else if (++s_mode_count >= 10u) {
+            s_mode_state = raw;
+            s_mode_count = 0u;
+        }
+    }
 }
 
 /* ---- Digital input getters -----------------------------------------------*/
 
 bool HwIo_GetEStop(void)                 { return s_estop_active; }
+void HwIo_ResetEstopDebounce(void)       { s_estop_count = 0u; }
 bool HwIo_GetReedSwitch(ReedSwitch_t sw) { return s_reed[sw].state; }
 bool HwIo_GetProximity(void)             { return s_proximity.state; }
 bool HwIo_GetResetBtn(void)              { return s_reset_btn.state; }
@@ -118,8 +136,7 @@ bool HwIo_GetProxRisingEdge(void)
 
 bool HwIo_GetSelectedMode(void)
 {
-    /* Mode switch: active LOW (PULLUP on PA6) */
-    return HAL_GPIO_ReadPin(Selected_Mode_GPIO_Port, Selected_Mode_Pin) == GPIO_PIN_RESET;
+    return s_mode_state;  /* debounced in HwIo_Poll100Hz — 100ms hold */
 }
 
 /* ---- Current sense --------------------------------------------------------*/
@@ -191,4 +208,10 @@ void Relay_SetStatus(bool on)
 {
     HAL_GPIO_WritePin(Relay_SysStatus_GPIO_Port, Relay_SysStatus_Pin,
                       on ? GPIO_PIN_SET : GPIO_PIN_RESET);
+}
+
+void Relay_SetSysmode(bool joystick)
+{
+    HAL_GPIO_WritePin(Relay_Sysmode_GPIO_Port, Relay_Sysmode_Pin,
+                      joystick ? GPIO_PIN_SET : GPIO_PIN_RESET);
 }

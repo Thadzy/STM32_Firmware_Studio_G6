@@ -63,6 +63,29 @@ typedef struct {
         uint16_t last_rx_len;       /* last LPUART1 packet length received   */
     } comms;
 
+    /* --- Debug mirror (updated every App_Run — expand in Live Expressions) -
+       In STM32CubeIDE Live Expressions, add ONE entry:  g_robot
+       then expand each sub-struct to watch everything live.
+
+       dbg.run_mode : 0=IDLE  1=JOG  2=AUTO  3=POINT  4=TEST
+       dbg.grip     : 0=IDLE  1=PICK_DOWN  2=PICK_CLOSE  3=PICK_UP
+                      4=PLACE_DOWN  5=PLACE_OPEN  6=PLACE_UP
+       dbg.joy_mode : 0=base_system  1=joystick
+       dbg.joy_btn  : ASCII  'O'=idle  'L'=left  'R'=right  'A' 'B' 'Y' 'U' 'D'
+       dbg.joy_conn : 0=gamepad_not_paired  1=gamepad_connected
+       dbg.pos_deg  : motor position in degrees (easier to read than position_counts)
+       dbg.vel_dps  : velocity in degrees/s
+    -------------------------------------------------------------------------- */
+    struct {
+        uint8_t  run_mode;
+        uint8_t  grip;
+        uint8_t  joy_mode;
+        char     joy_btn;
+        uint8_t  joy_conn;
+        float    pos_deg;
+        float    vel_dps;
+    } dbg;
+
 } RobotState_t;
 
 extern RobotState_t g_robot;

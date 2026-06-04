@@ -20,6 +20,7 @@ void  HwIo_Poll100Hz(void);
 
 /* --- Digital inputs --------------------------------------------------------*/
 bool  HwIo_GetEStop(void);                  /* true = E-Stop active (debounced) */
+void  HwIo_ResetEstopDebounce(void);        /* call after relay switching to discard spike counts */
 bool  HwIo_GetReedSwitch(ReedSwitch_t sw);  /* true = magnet detected (debounced) */
 bool  HwIo_GetProximity(void);              /* true = object detected (debounced) */
 bool  HwIo_GetProxRisingEdge(void);        /* true once per rising edge, latched at 100 Hz; clears on read */
@@ -41,5 +42,6 @@ void  Motor_Enable(void);                   /* energises motor-power relay */
 void  Motor_Disable(void);                  /* zeroes PWM then drops motor-power relay */
 
 void  Relay_SetStatus(bool on);             /* system-status indicator relay */
+void  Relay_SetSysmode(bool joystick);      /* mode pilot lamp: true=joystick, false=base system */
 
 #endif /* __HW_IO_H */

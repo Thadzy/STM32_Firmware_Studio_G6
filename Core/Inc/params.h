@@ -119,6 +119,9 @@
 /* --- Gripper Sequence ------------------------------------------------------*/
 #define GRIP_TIMEOUT_MS         3000u   /* per-step timeout if reed switch missing */
 
+/* --- Joystick (ESP32 Bluetooth gamepad via USART3 115200 8N1) -------------*/
+#define JOY_JOG_STEP_DEG        15.0f   /* degrees per L/R stick jog step         */
+
 /* --- Pick & Place ---------------------------------------------------------*/
 #define P2P_INDEX_COUNT         10u     /* number of configurable index positions             */
 /* Home offset Modbus register (writable by PC, outside base-system range)   */

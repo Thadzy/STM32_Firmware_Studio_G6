@@ -3,6 +3,7 @@
 #include "motor_controller.h"
 #include "uart_dma_manager.h"
 #include "hw_io.h"
+#include "joystick.h"
 #include "system_state.h"
 #include "params.h"
 #include "main.h"
@@ -92,6 +93,7 @@ typedef enum {
 } RunMode_t;
 
 static RunMode_t s_run_mode;
+static bool      s_joy_mode = false; /* true = joystick active, false = base system */
 
 /* Auto sequence state */
 static uint8_t  s_seq_pairs;            /* number of pick+place pairs (max 8)    */
@@ -344,6 +346,7 @@ static void homing_run(void)
                     rad_to_deg(MotorCtrl_GetPosition_rad()));
             MotorCtrl_Zero(s_home_offset_rad);
             MotorCtrl_SetTarget(s_user_home_rad);
+            Joystick_SendAudio('H'); /* @H = homing complete */
         }
         s_hom           = HOM_IDLE;
         s_move_start_ms = HAL_GetTick();
@@ -393,6 +396,69 @@ static void auto_run(void)
     set_task(pick ? 0x0002u : 0x0004u);
     MotorCtrl_SetTarget(target);
     s_seq_step++;
+}
+
+/* =========================================================================
+   Joystick handler — called every App_Run from main loop
+   L/R auto-repeat: ESP32 sends state only on change; when the motor finishes
+   a jog step and returns to IDLE, the next call sees joy.base still 'L'/'R'
+   and immediately triggers the next step — natural hold-to-repeat.
+   ========================================================================= */
+static void handle_joystick(void)
+{
+    if (!s_joy_mode) return;          /* base system mode — joystick disabled */
+
+    JoyState_t joy = Joystick_GetState();
+    if (!joy.connected) return;
+
+    /* Emergency — enter FAULT so pilot lamp fires and reset is required */
+    if (joy.emergency == 'P' || joy.base == 'X') {
+        if (g_robot.fsm != STATE_FAULT) {
+            MotorCtrl_Stop();
+            g_robot.fsm              = STATE_FAULT;
+            g_robot.comms.fault_code = 0x10u; /* joystick e-stop */
+            s_run_mode               = RUN_IDLE;
+            set_task(0x0000);
+        }
+        return;
+    }
+
+    /* All other commands only accepted when idle and gripper is not running */
+    if (g_robot.fsm != STATE_IDLE) return;
+    if (s_grip != GRIP_IDLE)       return;
+
+    switch (joy.base) {
+    case 'L':   /* jog CCW */
+    case 'R': { /* jog CW  */
+        float step = deg_to_rad((joy.base == 'R') ? JOY_JOG_STEP_DEG : -JOY_JOG_STEP_DEG);
+        MotorCtrl_SetTarget(MotorCtrl_GetPosition_rad() + step);
+        set_task(0x0008);
+        s_move_start_ms = HAL_GetTick();
+        g_robot.fsm     = STATE_RUNNING;
+        s_run_mode      = RUN_JOG;
+        break;
+    }
+    case 'A':                        /* Pick: down → close → up */
+        gripper_start(true);
+        break;
+    case 'B':                        /* Place: down → open → up */
+        gripper_start(false);
+        break;
+    case 'U':                        /* Manual gripper up       */
+        Gripper_SetVertical(true);
+        break;
+    case 'D':                        /* Manual gripper down     */
+        Gripper_SetVertical(false);
+        break;
+    case 'Y':                        /* Home                    */
+        g_robot.fsm = STATE_HOMING;
+        s_hom       = HOM_INIT;
+        set_task(0x0001);
+        Joystick_SendAudio('h');     /* @h = homing started     */
+        break;
+    default:
+        break;
+    }
 }
 
 /* =========================================================================
@@ -539,6 +605,7 @@ void App_Init(void)
 {
     HwIo_Init();
     UartDma_Init();
+    Joystick_Init();
     MotorCtrl_Init();
     ModbusBridge_Init();
     Motor_Enable();
@@ -548,17 +615,47 @@ void App_Init(void)
     s_run_mode          = RUN_IDLE;
     s_grip              = GRIP_IDLE;
     s_gripper_triggered = false;
+
+    /* Initialise mode relay to match physical switch at power-on */
+    s_joy_mode = HwIo_GetSelectedMode();
+    Relay_SetSysmode(s_joy_mode);
 }
 
 void App_Run(void)
 {
     /* Poll sensors into g_robot (non-ISR sensors) */
-    /* E-stop disabled: NC switch grounds PA5 when unpressed — fix wiring
-       before re-enabling. Wire NO contact to PA5 (HIGH=safe, LOW=stop).  */
-    g_robot.sensors.estop         = false;
+    /* E-stop: NC contact on PA5 — polarity inverted in hw_io.c (HIGH=active) */
+    g_robot.sensors.estop         = HwIo_GetEStop();
     g_robot.sensors.selected_mode = HwIo_GetSelectedMode();
     g_robot.sensors.reset_btn     = HwIo_GetResetBtn();
     g_robot.sensors.proximity     = HwIo_GetProximity();
+
+    /* Mode switch: ignore during FAULT (emergency can cause GPIO transients).
+       Soft-stop any running motion so new mode takes control from clean state. */
+    if (g_robot.sensors.selected_mode != s_joy_mode && g_robot.fsm != STATE_FAULT) {
+        s_joy_mode = g_robot.sensors.selected_mode;
+        Relay_SetSysmode(s_joy_mode);
+        HwIo_ResetEstopDebounce();  /* discard relay-induced spike on PA5 */
+        Joystick_SendAudio(s_joy_mode ? 'J' : 'S');
+        if (g_robot.fsm == STATE_RUNNING) {
+            MotorCtrl_Stop();
+            g_robot.fsm = STATE_IDLE;
+            s_run_mode  = RUN_IDLE;
+            set_task(0x0000);
+        }
+    }
+
+    /* Update debug mirror — expand g_robot in Live Expressions to see all */
+    {
+        JoyState_t _j = Joystick_GetState();
+        g_robot.dbg.run_mode = (uint8_t)s_run_mode;
+        g_robot.dbg.grip     = (uint8_t)s_grip;
+        g_robot.dbg.joy_mode = (uint8_t)s_joy_mode;
+        g_robot.dbg.joy_btn  = _j.base;
+        g_robot.dbg.joy_conn = (uint8_t)_j.connected;
+        g_robot.dbg.pos_deg  = rad_to_deg(MotorCtrl_GetPosition_rad());
+        g_robot.dbg.vel_dps  = g_robot.motion.velocity_rps * 360.0f;
+    }
 
     /* Drain UART RX → Modbus callbacks → register updates */
     UartDma_Process();
@@ -569,8 +666,30 @@ void App_Run(void)
     /* Advance gripper sequence (runs independently of FSM) */
     gripper_seq_run();
 
+    /* Handle joystick before FSM so commands take effect this iteration */
+    handle_joystick();
+
     /* Run main FSM */
     fsm_run();
+
+    /* Emergency pilot lamp — ON whenever robot is in FAULT */
+    Relay_SetStatus(g_robot.fsm == STATE_FAULT);
+
+    /* Audio feedback on FSM state transitions */
+    {
+        static FsmState_t s_prev_fsm = STATE_INIT;
+        if (g_robot.fsm != s_prev_fsm) {
+            switch (g_robot.fsm) {
+            case STATE_HOMING: Joystick_SendAudio('h'); break; /* homing started */
+            case STATE_FAULT:  Joystick_SendAudio('E'); break; /* fault          */
+            case STATE_IDLE:
+                if (s_prev_fsm == STATE_FAULT) Joystick_SendAudio('C'); /* cleared */
+                break;
+            default: break;
+            }
+            s_prev_fsm = g_robot.fsm;
+        }
+    }
 
     /* Periodic FSM state telemetry every 2 s for debug.
        Format: $ST,<FsmState_t>,<RunMode_t>  (0=INIT,1=HOMING,2=IDLE,3=RUNNING,4=FAULT) */
