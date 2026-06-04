@@ -116,6 +116,9 @@
 #define HOMING_SETTLE_MS        1000u   /* ms to wait after reaching center before zeroing    */
 #define MOVE_TIMEOUT_MS         10000u  /* ms — jog/P2P abort to IDLE if IsAtTarget not met   */
 
+/* --- Gripper Sequence ------------------------------------------------------*/
+#define GRIP_TIMEOUT_MS         3000u   /* per-step timeout if reed switch missing */
+
 /* --- Pick & Place ---------------------------------------------------------*/
 #define P2P_INDEX_COUNT         10u     /* number of configurable index positions             */
 /* Home offset Modbus register (writable by PC, outside base-system range)   */

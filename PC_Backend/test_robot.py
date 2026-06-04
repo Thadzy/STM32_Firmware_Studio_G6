@@ -153,7 +153,12 @@ def print_status(ser):
     estop = bool(emerg & 1) if emerg is not None else '?'
     fc    = (emerg >> 8) if emerg is not None else '?'
     prox  = bool(sensors & 0x08) if sensors is not None else '?'
-    print(f"  pos={pos:.1f}°  vel={vel:.1f}°/s  task={task}  prox={prox}  estop={estop}  fault_code={fc}")
+    reed_up   = bool(sensors & 0x01) if sensors is not None else '?'
+    reed_down = bool(sensors & 0x02) if sensors is not None else '?'
+    reed_close= bool(sensors & 0x04) if sensors is not None else '?'
+    print(f"  pos={pos:.1f}°  vel={vel:.1f}°/s  task={task}")
+    print(f"  prox={prox}  estop={estop}  fault_code={fc}")
+    print(f"  reed: up={reed_up}  down={reed_down}  closed={reed_close}")
 
 def wait_idle(ser, timeout=20.0, label='') -> bool:
     """Poll task reg until 0. Print progress. Return True if reached."""
@@ -282,6 +287,50 @@ def test_auto(ser, pairs=((1, 2),)):
     return ok
 
 
+def wait_grip(ser, timeout=12.0) -> bool:
+    """Poll reg 0x03 until 0 (sequence complete) or timeout."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        drain(ser, 0.05)
+        sensors = read_reg(ser, 0x26)
+        val     = read_reg(ser, 0x03)
+        reed_up   = bool(sensors & 0x01) if sensors is not None else '?'
+        reed_down = bool(sensors & 0x02) if sensors is not None else '?'
+        reed_close= bool(sensors & 0x04) if sensors is not None else '?'
+        print(f"  ... grip_reg={val}  up={reed_up}  down={reed_down}  closed={reed_close}")
+        if val == 0:
+            return True
+        time.sleep(0.4)
+    print(f"  x Timeout ({timeout:.0f}s)")
+    return False
+
+
+def test_grip(ser, pick: bool):
+    label = 'PICK' if pick else 'PLACE'
+    print(f"\n══ GRIPPER {label} TEST ══")
+    drain(ser, 0.3)
+
+    sensors = read_reg(ser, 0x26)
+    reed_up   = bool(sensors & 0x01) if sensors is not None else '?'
+    reed_down = bool(sensors & 0x02) if sensors is not None else '?'
+    reed_close= bool(sensors & 0x04) if sensors is not None else '?'
+    print(f"  Before: up={reed_up}  down={reed_down}  closed={reed_close}")
+
+    cmd = 1 if pick else 2
+    write_reg(ser, 0x03, cmd)
+    print(f"  >> reg 0x03 = {cmd} ({label}) sent")
+
+    ok = wait_grip(ser)
+
+    sensors = read_reg(ser, 0x26)
+    reed_up   = bool(sensors & 0x01) if sensors is not None else '?'
+    reed_down = bool(sensors & 0x02) if sensors is not None else '?'
+    reed_close= bool(sensors & 0x04) if sensors is not None else '?'
+    print(f"  After:  up={reed_up}  down={reed_down}  closed={reed_close}")
+    print(f"  {'OK' if ok else 'TIMEOUT'} — {label} sequence {'complete' if ok else 'did not finish'}")
+    return ok
+
+
 def soft_stop(ser):
     write_reg(ser, 0x25, 1)
     time.sleep(0.05)
@@ -340,7 +389,10 @@ Commands:
   j       Jog +15° (CCW)
   J       Jog -15° (CW)
   jN      Jog N degrees  (e.g. j30, j-20)
-  a       Auto test — 1 pair (index 1→2)
+  gp      Gripper Pick sequence (down→close→up)
+  gl      Gripper Place sequence (down→open→up)
+  a       Auto test — 1 pair, no gripper
+  ag      Auto test — 1 pair, gripper enabled
   s       Soft stop
   r       Read status
   q       Quit
@@ -369,8 +421,16 @@ Commands:
                     test_jog(ser, int(cmd[1:]))
                 except ValueError:
                     print("  Bad step. Use e.g. j30 or j-20")
+            elif cmd == 'gp':
+                test_grip(ser, pick=True)
+            elif cmd == 'gl':
+                test_grip(ser, pick=False)
             elif cmd == 'a':
                 test_auto(ser, pairs=[(1, 2)])
+            elif cmd == 'ag':
+                write_reg(ser, 0x04, 1)   # gripper enable
+                test_auto(ser, pairs=[(1, 2)])
+                write_reg(ser, 0x04, 0)   # disable after
             elif cmd == 's':
                 soft_stop(ser)
             elif cmd == 'r':

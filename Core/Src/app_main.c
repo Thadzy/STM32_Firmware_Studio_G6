@@ -63,6 +63,24 @@ static uint32_t s_move_start_ms;   /* HAL_GetTick() when STATE_RUNNING was enter
 static uint32_t s_tel_tick;        /* last $ST telemetry send time */
 
 /* =========================================================================
+   Gripper sequence state machine
+   Sequence: Down → action (Close/Open) → Up, with reed confirmation + timeout
+   ========================================================================= */
+typedef enum {
+    GRIP_IDLE = 0,
+    GRIP_PICK_DOWN,    /* going down before grab  */
+    GRIP_PICK_CLOSE,   /* closing claw             */
+    GRIP_PICK_UP,      /* lifting with object      */
+    GRIP_PLACE_DOWN,   /* going down to release    */
+    GRIP_PLACE_OPEN,   /* opening claw             */
+    GRIP_PLACE_UP,     /* lifting empty            */
+} GripperState_t;
+
+static GripperState_t s_grip;
+static uint32_t       s_grip_t;
+static bool           s_gripper_triggered; /* auto_run: gripper started for current arrival */
+
+/* =========================================================================
    Running-mode sub-state
    ========================================================================= */
 typedef enum {
@@ -120,6 +138,72 @@ static float resolve_target(int16_t raw, uint16_t unit)
 static void set_task(uint16_t task_bits)
 {
     ModbusBridge_SetReg(0x27, task_bits);
+}
+
+/* =========================================================================
+   Gripper helpers
+   ========================================================================= */
+static void gripper_start(bool pick)
+{
+    Gripper_SetVertical(false); /* always go down first */
+    s_grip_t = HAL_GetTick();
+    s_grip   = pick ? GRIP_PICK_DOWN : GRIP_PLACE_DOWN;
+}
+
+static void gripper_seq_run(void)
+{
+    uint32_t now     = HAL_GetTick();
+    bool     timeout = (now - s_grip_t) >= GRIP_TIMEOUT_MS;
+
+    switch (s_grip) {
+    case GRIP_IDLE: break;
+
+    case GRIP_PICK_DOWN:
+        if (HwIo_GetReedSwitch(REED_DOWN) || timeout) {
+            Gripper_SetClaw(false);    /* close — grab object */
+            s_grip_t = now;
+            s_grip   = GRIP_PICK_CLOSE;
+        }
+        break;
+
+    case GRIP_PICK_CLOSE:
+        if (HwIo_GetReedSwitch(REED_CLOSE) || timeout) {
+            Gripper_SetVertical(true); /* lift with object */
+            s_grip_t = now;
+            s_grip   = GRIP_PICK_UP;
+        }
+        break;
+
+    case GRIP_PICK_UP:
+        if (HwIo_GetReedSwitch(REED_UP) || timeout) {
+            s_grip = GRIP_IDLE;
+            ModbusBridge_SetReg(0x03, 0); /* sequence complete */
+        }
+        break;
+
+    case GRIP_PLACE_DOWN:
+        if (HwIo_GetReedSwitch(REED_DOWN) || timeout) {
+            Gripper_SetClaw(true);     /* open — release object */
+            s_grip_t = now;
+            s_grip   = GRIP_PLACE_OPEN;
+        }
+        break;
+
+    case GRIP_PLACE_OPEN:
+        if (HwIo_GetReedSwitch(REED_OPEN) || timeout) {
+            Gripper_SetVertical(true); /* lift empty */
+            s_grip_t = now;
+            s_grip   = GRIP_PLACE_UP;
+        }
+        break;
+
+    case GRIP_PLACE_UP:
+        if (HwIo_GetReedSwitch(REED_UP) || timeout) {
+            s_grip = GRIP_IDLE;
+            ModbusBridge_SetReg(0x03, 0); /* sequence complete */
+        }
+        break;
+    }
 }
 
 /* =========================================================================
@@ -281,28 +365,33 @@ static void homing_run(void)
 static void auto_run(void)
 {
     if (s_seq_pairs == 0 || s_seq_step >= s_seq_pairs * 2u || s_seq_step >= 16u) {
-        /* Sequence complete */
-        g_robot.fsm = STATE_IDLE;
-        s_run_mode  = RUN_IDLE;
+        g_robot.fsm         = STATE_IDLE;
+        s_run_mode          = RUN_IDLE;
+        s_gripper_triggered = false;
         set_task(0x0000);
         return;
     }
 
-    if (s_seq_step > 0u && !MotorCtrl_IsAtTarget()) return; /* wait for previous move */
+    /* Wait: motor must be at target AND gripper must be idle before next action */
+    if (s_seq_step > 0u && (!MotorCtrl_IsAtTarget() || s_grip != GRIP_IDLE)) return;
 
-    uint8_t pair  = s_seq_step / 2u;
-    bool    pick  = (s_seq_step & 1u) == 0u;
-    int16_t raw   = s_seq_slots[pair * 2u + (pick ? 0u : 1u)];
-    float   target = resolve_target(raw, 1u); /* sequence always uses index  */
-
-    set_task(pick ? 0x0002u : 0x0004u); /* GoPick / GoPlace                */
-    MotorCtrl_SetTarget(target);
-
-    if (s_gripper_en && !pick) {
-        /* Execute gripper place sequence when arriving at place position    */
-        Gripper_SetClaw(false); /* close — place */
+    /* Motor arrived. Start gripper sequence for this position (once per arrival).
+       Odd step = just arrived at pick; even non-zero step = just arrived at place. */
+    if (s_seq_step > 0u && s_gripper_en && !s_gripper_triggered) {
+        gripper_start((s_seq_step % 2u) == 1u); /* true=pick, false=place */
+        s_gripper_triggered = true;
+        return; /* re-enter when gripper finishes */
     }
+    s_gripper_triggered = false;
 
+    /* Command next motor move */
+    uint8_t pair   = s_seq_step / 2u;
+    bool    pick   = (s_seq_step & 1u) == 0u;
+    int16_t raw    = s_seq_slots[pair * 2u + (pick ? 0u : 1u)];
+    float   target = resolve_target(raw, 1u); /* sequence always uses index */
+
+    set_task(pick ? 0x0002u : 0x0004u);
+    MotorCtrl_SetTarget(target);
     s_seq_step++;
 }
 
@@ -334,10 +423,11 @@ static void fsm_run(void)
             g_robot.fsm = STATE_HOMING;
             s_hom       = HOM_INIT;
             set_task(0x0001);
-        } else if (mode_reg & 0x02u) {                  /* Jog              */
+        } else if ((mode_reg & 0x02u) || (ModbusBridge_GetReg(0x05) != 0u)) { /* Jog */
             int16_t step_raw = (int16_t)ModbusBridge_GetReg(0x05);
             if (step_raw != 0) {
-                ModbusBridge_SetReg(0x01, 0); /* only consume mode when step is ready */
+                ModbusBridge_SetReg(0x01, 0);
+                ModbusBridge_SetReg(0x05, 0); /* consume step so repeat writes don't chain */
                 float cur = MotorCtrl_GetPosition_rad();
                 MotorCtrl_SetTarget(cur + deg_to_rad((float)step_raw));
                 set_task(0x0008); /* GoPoint */
@@ -354,7 +444,8 @@ static void fsm_run(void)
                 for (uint8_t i = 0; i < 16u; i++) {
                     s_seq_slots[i] = (int16_t)ModbusBridge_GetReg(0x12u + i);
                 }
-                s_seq_step  = 0;
+                s_seq_step          = 0;
+                s_gripper_triggered = false;
                 g_robot.fsm = STATE_RUNNING;
                 s_run_mode  = RUN_AUTO;
             }
@@ -381,6 +472,16 @@ static void fsm_run(void)
                 s_move_start_ms = HAL_GetTick();
                 g_robot.fsm = STATE_RUNNING;
                 s_run_mode  = RUN_POINT;
+            }
+        }
+
+        /* Gripper manual pick/place sequence (0x03): 1=Pick, 2=Place */
+        {
+            uint16_t grip_cmd = ModbusBridge_GetReg(0x03);
+            if (grip_cmd != 0u && s_grip == GRIP_IDLE) {
+                ModbusBridge_SetReg(0x03, 0);
+                if (grip_cmd & 0x01u)      gripper_start(true);  /* Pick  */
+                else if (grip_cmd & 0x02u) gripper_start(false); /* Place */
             }
         }
         break;
@@ -442,9 +543,11 @@ void App_Init(void)
     ModbusBridge_Init();
     Motor_Enable();
     HAL_TIM_Base_Start_IT(&htim6);
-    g_robot.fsm = STATE_INIT;
-    s_hom       = HOM_IDLE;
-    s_run_mode  = RUN_IDLE;
+    g_robot.fsm         = STATE_INIT;
+    s_hom               = HOM_IDLE;
+    s_run_mode          = RUN_IDLE;
+    s_grip              = GRIP_IDLE;
+    s_gripper_triggered = false;
 }
 
 void App_Run(void)
@@ -462,6 +565,9 @@ void App_Run(void)
 
     /* Refresh Modbus read registers */
     ModbusBridge_Tick();
+
+    /* Advance gripper sequence (runs independently of FSM) */
+    gripper_seq_run();
 
     /* Run main FSM */
     fsm_run();
