@@ -130,34 +130,52 @@ void UartDma_SetUsart3RxCb(UartRxCb_t cb) { s_u3_rx_cb = cb; }
 
 bool UartDma_SendModbus(const uint8_t *data, uint16_t len)
 {
-    if (!tx_write(data, len)) return false;
+    /* Called from DMA ISR context — protect shared ring state with PRIMASK */
+    uint32_t ps = __get_PRIMASK();
+    __disable_irq();
 
-    s_msgs[s_msg_wr] = (TxMsg_t){ .len = len, .is_modbus = true };
-    s_msg_wr = (s_msg_wr + 1u) % TX_MSG_MAX;
-    s_modbus_queued++;
+    bool ok = false;
+    if (tx_write(data, len)) {
+        s_msgs[s_msg_wr] = (TxMsg_t){ .len = len, .is_modbus = true };
+        s_msg_wr = (s_msg_wr + 1u) % TX_MSG_MAX;
+        s_modbus_queued++;
+        ok = true;
+    }
 
-    tx_kick();
-    return true;
+    __set_PRIMASK(ps);
+    if (ok) tx_kick();
+    return ok;
 }
 
 bool UartDma_SendTelemetry(const char *str)
 {
+    /* Called from TIM6 ISR and main loop — protect shared ring state */
+    uint32_t ps = __get_PRIMASK();
+    __disable_irq();
+
+    bool ok = false;
+
     /* Drop: TX buffer too full (reserve space for Modbus replies) */
-    if (tx_used() >= UART_TX_HIGH_WATERMARK) return false;
+    if (tx_used() >= UART_TX_HIGH_WATERMARK) goto done;
 
     /* Drop: Modbus frame still in ring buffer or T3.5 gap in effect */
-    if (s_modbus_queued > 0) return false;
+    if (s_modbus_queued > 0) goto done;
     if (s_t35_active && (HAL_GetTick() - s_t35_start_tick) < MODBUS_T35_DELAY_MS)
-        return false;
+        goto done;
 
-    uint16_t len = (uint16_t)strlen(str);
-    if (!tx_write((const uint8_t *)str, len)) return false;
+    {
+        uint16_t len = (uint16_t)strlen(str);
+        if (tx_write((const uint8_t *)str, len)) {
+            s_msgs[s_msg_wr] = (TxMsg_t){ .len = len, .is_modbus = false };
+            s_msg_wr = (s_msg_wr + 1u) % TX_MSG_MAX;
+            ok = true;
+        }
+    }
 
-    s_msgs[s_msg_wr] = (TxMsg_t){ .len = len, .is_modbus = false };
-    s_msg_wr = (s_msg_wr + 1u) % TX_MSG_MAX;
-
-    tx_kick();
-    return true;
+done:
+    __set_PRIMASK(ps);
+    if (ok) tx_kick();
+    return ok;
 }
 
 bool UartDma_SendTelemetry_T(uint32_t ts_ms,

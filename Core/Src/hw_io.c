@@ -49,6 +49,19 @@ static void debounce_update(Debounce_t *d, bool raw)
 
 void HwIo_Init(void)
 {
+    /* E-stop: NO switch wired to VCC.  Explicitly set PULLDOWN so pin is always
+       defined regardless of CubeMX config.
+       Open (normal) → PULLDOWN holds pin LOW → inactive.
+       Pressed (closes to VCC) → pin HIGH → active (matches GPIO_PIN_SET check). */
+    {
+        GPIO_InitTypeDef g = {0};
+        g.Pin   = E_Stop_Pin;
+        g.Mode  = GPIO_MODE_INPUT;
+        g.Pull  = GPIO_PULLDOWN;
+        g.Speed = GPIO_SPEED_FREQ_LOW;
+        HAL_GPIO_Init(E_Stop_GPIO_Port, &g);
+    }
+
     /* ADC: self-calibrate, then start continuous conversion.
        Auto-zero: average 64 samples while motor is off to find V_zero.
        This eliminates offset error from sensor VCC tolerance or divider mismatch. */
@@ -70,10 +83,11 @@ void HwIo_Init(void)
 
 void HwIo_Poll100Hz(void)
 {
-    /* E-Stop: active LOW (PULLUP on PA5).
-       Pressed = contact closes to GND = LOW = active.
-       8 consecutive LOW reads = trigger; one HIGH read = immediate clear. */
-    if (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_RESET) {
+    /* E-Stop: active HIGH (PULLDOWN on PA5).
+       Normal = contact open = pulled LOW = inactive.
+       Pressed = contact closes to VCC = HIGH = active.
+       8 consecutive HIGH reads = trigger; one LOW read = immediate clear. */
+    if (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_SET) {
         if (s_estop_count < ESTOP_DEBOUNCE_THRESHOLD) {
             s_estop_count++;
         }

@@ -563,13 +563,13 @@ static void handle_joystick(void)
    ========================================================================= */
 static void fsm_run(void)
 {
-    /* E-stop overrides everything — disabled: NC switch false-triggers during jog */
-    /* if (g_robot.sensors.estop && g_robot.fsm != STATE_FAULT) {
-        g_robot.fsm = STATE_FAULT;
+    /* E-stop: NO switch to VCC, PULLDOWN — safe to enable, no false-triggers */
+    if (g_robot.sensors.estop && g_robot.fsm != STATE_FAULT) {
+        g_robot.fsm              = STATE_FAULT;
         g_robot.comms.fault_code = 0x01u;
         MotorCtrl_Stop();
         set_task(0x0000);
-    } */
+    }
 
     uint16_t mode_reg = ModbusBridge_GetReg(0x01);
 
@@ -586,6 +586,7 @@ static void fsm_run(void)
             g_robot.fsm = STATE_HOMING;
             s_hom       = HOM_INIT;
             set_task(0x0001);
+            s_hb_last_tick = HAL_GetTick(); /* HOME write proves PC alive — reset HB timer */
         } else if ((mode_reg & 0x02u) || (ModbusBridge_GetReg(0x05) != 0u)) { /* Jog */
             int16_t step_raw = (int16_t)ModbusBridge_GetReg(0x05);
             if (step_raw != 0) {
@@ -780,10 +781,17 @@ void App_Run(void)
         if (hb_now != s_hb_last_val) {
             s_hb_last_val  = hb_now;
             s_hb_last_tick = HAL_GetTick();
+            /* Link restored — clear the stale PC-link-lost code */
+            if (g_robot.comms.fault_code == 0x20u)
+                g_robot.comms.fault_code = 0u;
         }
         uint32_t hb_age = HAL_GetTick() - s_hb_last_tick;
         g_robot.dbg.hb_age_ms = (hb_age > 0xFFFFu) ? 0xFFFFu : (uint16_t)hb_age;
-        if (hb_age >= HEARTBEAT_TIMEOUT_MS && g_robot.fsm != STATE_FAULT) {
+        /* Do not interrupt homing — it has its own safety limits (FAULT codes 2-4).
+           Stopping mid-sweep corrupts edge detection and causes 0.4°/12s creep. */
+        if (hb_age >= HEARTBEAT_TIMEOUT_MS &&
+            g_robot.fsm != STATE_FAULT    &&
+            g_robot.fsm != STATE_HOMING) {
             MotorCtrl_Stop();
             g_robot.fsm              = STATE_IDLE;
             s_run_mode               = RUN_IDLE;

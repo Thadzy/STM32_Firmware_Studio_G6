@@ -617,11 +617,17 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : E_Stop_Pin Selected_Mode_Pin Reset_Btn_Pin */
-  GPIO_InitStruct.Pin = E_Stop_Pin|Selected_Mode_Pin|Reset_Btn_Pin;
+  /*Configure GPIO pins : Selected_Mode_Pin Reset_Btn_Pin */
+  GPIO_InitStruct.Pin = Selected_Mode_Pin|Reset_Btn_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : E_Stop_Pin */
+  GPIO_InitStruct.Pin = E_Stop_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  HAL_GPIO_Init(E_Stop_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : Reed_Up_Pin */
   GPIO_InitStruct.Pin = Reed_Up_Pin;

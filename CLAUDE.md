@@ -109,6 +109,36 @@ All values hardware-measured / system-identified. **Never change without asking 
 - Td = π / (ωn √(1−ζ²)) ≈ 41.2 ms → T2 = 4 steps, T3 = 8 steps
 - K = 0.8790; A1 = 0.2832, A2 = 0.4981, A3 = 0.2189
 
+## E-stop Wiring (resolved)
+
+E-stop switch is **NO, wired to VCC** (pin floats LOW when open, goes HIGH when pressed).
+
+- `hw_io.c HwIo_Init()`: explicitly calls `HAL_GPIO_Init` with `GPIO_PULLDOWN` to hold pin LOW during normal operation. This overrides CubeMX and guarantees no false trigger from floating.
+- `hw_io.c HwIo_Poll100Hz()`: checks `GPIO_PIN_SET` (HIGH = active). One HIGH read clears immediately; 8 consecutive HIGHs trigger.
+- `app_main.c fsm_run()`: estop check **re-enabled** — was disabled only for the old NC false-trigger issue.
+
+## Known Fixes
+
+### uart_dma_manager.c — TX ring race condition (fixed)
+
+`UartDma_SendModbus` is called from the DMA RX ISR (`HAL_UARTEx_RxEventCallback` → `on_rx` → `handle_fc03`).
+`UartDma_SendTelemetry` is called from TIM6 ISR (motor_controller outer loop at 100 Hz) and from the main loop.
+Both wrote to the shared TX ring buffer (`s_tx_head`, `s_msg_wr`, `s_modbus_queued`) without protection, causing `s_tx_head` corruption and garbled Modbus FC=0x03 responses → bad CRC → PC never reads YA heartbeat → STM32 heartbeat timeout → `MotorCtrl_Stop()` every timeout → motor never moves during homing.
+**Fix:** both functions now save/restore PRIMASK (`__get_PRIMASK`/`__disable_irq`/`__set_PRIMASK`) around the ring write + descriptor enqueue, with `tx_kick()` called after interrupts are restored.
+
+### serial_bridge.py — auto-scan false positive (fixed)
+
+Auto-scan was selecting com0com virtual ports (COM11/COM12) because they echo pings back. Fixed: `_scan_for_robot` now skips any port whose description contains "com0com" and skips COM11/COM12 explicitly. STM32 is on **COM13** (`STMicroelectronics STLink Virtual COM Port`). If auto-scan fails, run: `python serial_bridge.py COM13`.
+
+### serial_bridge.py — diagnostic logging
+
+Added `DEBUG = True` flag. When set:
+
+- All telemetry lines (`$T`, `$HOM`, `$ST`) are echoed to console.
+- FC=0x03 success logs include the heartbeat register value (flags YA).
+- FC=0x03 CRC failures print expected vs received CRC and a hex dump of head/tail bytes.
+- FC=0x06 writes from main.exe to robot are logged (heartbeat HI, home command, etc.).
+
 ## Implementation Status
 
 - [x] Phase 1 — `params.h`, `hw_io.h/.c`
