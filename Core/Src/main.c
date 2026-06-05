@@ -128,6 +128,13 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
+	  // อ่านค่าดิบจากขา PB4 และ PB5 โดยตรง
+	  GPIO_PinState chA = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_4);
+	  GPIO_PinState chB = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_5);
+
+	  // ปริ้นต์ออกหน้าจอ Serial
+	  HAL_Delay(100); // หน่วงเวลาให้อ่านทัน
+
     App_Run();
   }
   /* USER CODE END 3 */
@@ -617,24 +624,16 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : Selected_Mode_Pin Reset_Btn_Pin */
-  GPIO_InitStruct.Pin = Selected_Mode_Pin|Reset_Btn_Pin;
+  /*Configure GPIO pins : E_Stop_Pin Selected_Mode_Pin Reset_Btn_Pin */
+  GPIO_InitStruct.Pin = E_Stop_Pin|Selected_Mode_Pin|Reset_Btn_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pin : E_Stop_Pin */
-  GPIO_InitStruct.Pin = E_Stop_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
-  HAL_GPIO_Init(E_Stop_GPIO_Port, &GPIO_InitStruct);
-
   /*Configure GPIO pin : Reed_Up_Pin */
-  /* NO reed switch wired to VCC: open = floating, closed = HIGH.
-     PULLDOWN ensures open reads LOW (inactive) instead of floating.     */
   GPIO_InitStruct.Pin = Reed_Up_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(Reed_Up_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : Relay_SysStatus_Pin Relay_Sysmode_Pin Relay_MotorPower_Pin */
@@ -645,12 +644,6 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /*Configure GPIO pin : Proximity_Sensor_Pin */
-  /* Open-collector optocoupler output:
-       No object  → transistor ON  → sinks pin to GND  → LOW  (inactive)
-       Object det → transistor OFF → pin floats         → HIGH via PULLUP (active)
-     PULLUP lifts the floating pin to 3.3 V so the two states are electrically
-     distinct.  With PULLDOWN both states read 0 V and the MCU is blind.
-     Read logic: GPIO_PIN_SET (HIGH) = triggered.                          */
   GPIO_InitStruct.Pin = Proximity_Sensor_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;

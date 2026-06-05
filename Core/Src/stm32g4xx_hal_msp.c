@@ -532,6 +532,23 @@ void HAL_TIM_Encoder_MspInit(TIM_HandleTypeDef* htim_encoder)
 
     /* USER CODE BEGIN TIM3_MspInit 1 */
 
+    /* ATM103 encoder has open-collector outputs: it sinks the line LOW on a
+       pulse and releases it (floating) between pulses.  With GPIO_NOPULL the
+       floating state is undefined and the timer sees noise-induced glitches on
+       both channels — causing the counter to jitter between 0 and ±1 instead
+       of accumulating, regardless of actual shaft movement.
+       PULLUP gives the open-collector a clean defined HIGH between pulses so
+       the timer sees sharp, noise-free transitions on both TI1 and TI2.        */
+    {
+        GPIO_InitTypeDef g = {0};
+        g.Pin       = GPIO_PIN_4 | GPIO_PIN_5;   /* PB4 = TIM3_CH1, PB5 = TIM3_CH2 */
+        g.Mode      = GPIO_MODE_AF_PP;
+        g.Pull      = GPIO_PULLUP;               /* was GPIO_NOPULL — root cause    */
+        g.Speed     = GPIO_SPEED_FREQ_LOW;
+        g.Alternate = GPIO_AF2_TIM3;
+        HAL_GPIO_Init(GPIOB, &g);
+    }
+
     /* USER CODE END TIM3_MspInit 1 */
 
   }
