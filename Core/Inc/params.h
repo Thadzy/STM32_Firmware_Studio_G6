@@ -131,7 +131,7 @@
    Raise back toward 0.8 once sensor wiring is confirmed and edge is seen. */
 #define HOMING_VEL_RADS         0.8f    /* creep velocity for edge search (rad/s) ~46 deg/s   */
 /* --- Two-stage homing ------------------------------------------------------*/
-#define HOMING_FAST_VEL_RADS    1.0f    /* Stage-1 coarse search (= HOMING_VEL_RADS)          */
+#define HOMING_FAST_VEL_RADS    0.8f    /* Stage-1 coarse search (= HOMING_VEL_RADS)          */
 #define HOMING_PREC_VEL_RADS    0.5f    /* Stage-3 precision search (~29 deg/s). Above motor
                                            dead zone → smooth, no stick-slip crawl. Repeatability
                                            comes from A/B latency cancelling at EQUAL velocity,
