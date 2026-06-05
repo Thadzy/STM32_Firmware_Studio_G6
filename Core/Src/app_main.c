@@ -342,6 +342,7 @@ static void homing_run(void)
                     rad_to_deg(s_user_home_rad),
                     rad_to_deg(MotorCtrl_GetPosition_rad()));
             MotorCtrl_Zero(s_home_offset_rad);
+            MotorCtrl_SetZvdBypass(true);   /* keep ZVD off until rod is attached and ZVD params are re-tuned */
             MotorCtrl_SetTarget(s_user_home_rad);
             Joystick_SendAudio('H'); /* @H = homing complete */
         }
@@ -587,20 +588,31 @@ static void fsm_run(void)
             s_hom       = HOM_INIT;
             set_task(0x0001);
             s_hb_last_tick = HAL_GetTick(); /* HOME write proves PC alive — reset HB timer */
-        } else if ((mode_reg & 0x02u) || (ModbusBridge_GetReg(0x05) != 0u)) { /* Jog */
+        } else if ((mode_reg & 0x02u) || (ModbusBridge_GetReg(0x05) != 0u)) { /* Jog step */
             int16_t step_raw = (int16_t)ModbusBridge_GetReg(0x05);
             if (step_raw != 0) {
                 ModbusBridge_SetReg(0x01, 0);
-                /* Keep reg 0x05 non-zero while held so velocity stays active.
-                   PC must write 0 to reg 0x05 to release (acts as "key up"). */
-                float vel = (step_raw > 0) ?  JOY_JOG_VEL_RADS : -JOY_JOG_VEL_RADS;
-                MotorCtrl_JogVelocity(vel);
-                s_jog_vel_active = true;
-                set_task(0x0008);
-            } else if (s_jog_vel_active) {
-                /* reg 0x05 written to 0 → release velocity jog */
-                MotorCtrl_JogRelease();
-                s_jog_vel_active = false;
+                /* Clear trigger immediately — prevents re-firing on next App_Run.
+                   PC writes a non-zero signed degree value (e.g. +5 or -10).
+                   Firmware fires one discrete move and self-clears.              */
+                ModbusBridge_SetReg(0x05, 0);
+
+                /* Release any lingering velocity jog cleanly before step move    */
+                if (s_jog_vel_active) {
+                    MotorCtrl_JogRelease();
+                    s_jog_vel_active = false;
+                }
+
+                /* Compute absolute target: current_pos + step_size_deg → radians.
+                   step_raw is int16 → cast to float preserves sign correctly.   */
+                float step_rad = deg_to_rad((float)step_raw);
+                float target   = MotorCtrl_GetPosition_rad() + step_rad;
+
+                MotorCtrl_SetTarget(target);
+                set_task(0x0008);           /* GoPoint                           */
+                s_move_start_ms = HAL_GetTick();
+                g_robot.fsm = STATE_RUNNING;
+                s_run_mode  = RUN_POINT;
             }
         } else if (mode_reg & 0x04u) {                  /* Auto             */
             uint8_t pairs = (uint8_t)ModbusBridge_GetReg(0x22);
@@ -714,7 +726,8 @@ void App_Init(void)
     MotorCtrl_Init();
     ModbusBridge_Init();
     Motor_Enable();
-    MotorCtrl_SetZvdBypass(true);  /* ZVD disabled — re-enable after tuning */
+    MotorCtrl_SetZvdBypass(true);   /* ZVD disabled — re-enable after tuning */
+    g_robot.dbg.zvd_bypass = true;  /* mirror: keeps Live Expressions in sync  */
     HAL_TIM_Base_Start_IT(&htim6);
     g_robot.fsm         = STATE_INIT;
     s_hom               = HOM_IDLE;

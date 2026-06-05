@@ -87,6 +87,11 @@ typedef struct {
         float    vel_dps;
         uint16_t hb_age_ms; /* ms since last heartbeat register change */
 
+        /* Motion tuning toggles — write live from Live Expressions, no recompile.
+           zvd_bypass : 1 = ZVD shaper off (S-curve direct), 0 = ZVD active.
+                        Set to 1 when rod not attached or ZVD params not tuned.  */
+        bool zvd_bypass;
+
         /* Software Safety Stack -------------------------------------------
            en_*     : set false to disable a guard during commissioning
            tripped_*: latches true when the guard fires; clears on fault reset */

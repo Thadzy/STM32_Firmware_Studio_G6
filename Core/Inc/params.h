@@ -36,7 +36,8 @@
 /* --- Encoder (ATM103, 2048 CPR → TIM3 TI12 quadrature × 4 = 8192 cnt/rev)
    ENCODER_DIRECTION: set +1 if positive PWM → increasing counts.
                       set -1 if positive PWM → decreasing counts (flip here). */
-#define ENCODER_DIRECTION       (-1)    /* flip if motor runs away on first test */
+#define ENCODER_DIRECTION       (-1)    /* +1 = positive PWM → increasing counts.
+                                           -1 = positive PWM → decreasing counts (flip if motor runs away). */
 /* Workspace: 360° rotational, cable hard-limit 540°.
    Direct drive assumed — if a gearbox is fitted, multiply ENCODER_CPR by the ratio.
    MAX_POSITION_COUNTS = 1 full revolution = 8192 counts.

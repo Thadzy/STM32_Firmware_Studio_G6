@@ -666,6 +666,11 @@ void MotorCtrl_Tick100Hz(void)
         /* Fall through to normal path — s_running will gate correctly      */
     }
 
+    /* Live-expression toggle: g_robot.dbg.zvd_bypass can be written from the
+       STM32CubeIDE debugger without recompiling.  Mirrors to s_zvd_bypass so
+       the change takes effect on the next outer-loop tick.                    */
+    s_zvd_bypass = g_robot.dbg.zvd_bypass;
+
     if (!s_running) goto send_telemetry;
 
     /* ====================================================================
@@ -735,6 +740,18 @@ void MotorCtrl_Tick100Hz(void)
     /* --- 4. Outer position PID (derivative on measurement) --------------- */
     float pos_actual = s_kalman.x[0];
     float pos_err    = shaped - pos_actual;
+
+    /* Position deadband: if error is within ±POS_DEADBAND_RAD, treat as zero.
+       Without this the PID produces a sub-1-count PWM that lroundf truncates
+       to 0, the integral slowly winds, then kicks 1 PWM count which overshoots,
+       causing 1° stick-slip hunting indefinitely around the target.            */
+    if (fabsf(pos_err) < POSITION_DEADBAND_RAD) {
+        s_vel_sp = 0.0f;
+        s_acc_sp = 0.0f;
+        /* Do not integrate inside the deadband — prevents windup while parked */
+        s_pos_prev_meas = pos_actual;
+        goto send_telemetry;
+    }
 
     s_pos_integral += pos_err * DT_OUTER;
     if (s_pos_integral >  PID_POS_IMAX) s_pos_integral =  PID_POS_IMAX;

@@ -48,7 +48,7 @@ WS_PORT      = 8765
 BAUD         = 230400
 PARITY       = serial.PARITY_EVEN
 SLAVE_ADDR   = 21        # 0x15  Modbus slave address of the robot
-DEBUG        = True      # print telemetry + frame logs to console
+DEBUG        = False      # print telemetry + frame logs to console
 LOG_RATE_S   = 2.0       # min seconds between repeated BAD-CRC log lines
 
 # ── CRC-16 (Modbus) ────────────────────────────────────────────────────────
