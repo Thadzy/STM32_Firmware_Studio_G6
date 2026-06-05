@@ -56,7 +56,7 @@
 /* --- PID Gains — Position loop (outer, 100 Hz) -----------------------------*/
 #define PID_POS_KP              3.0f
 #define PID_POS_KI              0.02f
-#define PID_POS_KD              0.15f
+#define PID_POS_KD              0.0f
 #define PID_POS_IMAX            100.0f  /* integral clamp (rad)               */
 
 /* --- Feedforward Gains -----------------------------------------------------*/
@@ -97,6 +97,17 @@
 #define POSITION_DEADBAND_RAD   0.0175f     /* ≈ 1° — IsAtTarget threshold    */
 #define VELOCITY_SETTLED_RADS   0.05f       /* rad/s — near-stop threshold    */
 
+/* --- Software Safety Stack -------------------------------------------------*/
+#define SAFETY_ENC_STALL_PWM    5       /* |PWM| threshold to arm encoder health guard (10 % torque) */
+#define SAFETY_ENC_STALL_MS     200u    /* ticks of zero delta at high PWM before enc-disconnect fault */
+#define CURRENT_FAULT_AMPS      2.0f    /* TODO: calibrate to motor stall current — WCS1800 range ±35 A */
+#define SAFETY_CURRENT_MS       100u    /* ticks of overcurrent before fault (prevents sensor noise trips) */
+#define SAFETY_TRACKING_DEG     25.0f   /* max |target − position| after S-curve completes (degrees) */
+#define SAFETY_TRACKING_MS      300u    /* ticks of excess tracking error before jam fault */
+
+/* --- Heartbeat -------------------------------------------------------------*/
+#define HEARTBEAT_TIMEOUT_MS    2000u   /* soft-stop to IDLE if PC silent this long */
+
 /* --- UART / Modbus ---------------------------------------------------------*/
 #define UART_TX_BUF_SIZE        1024u
 #define UART_TX_HIGH_WATERMARK  800u
@@ -120,11 +131,28 @@
 #define GRIP_TIMEOUT_MS         3000u   /* per-step timeout if reed switch missing */
 
 /* --- Joystick (ESP32 Bluetooth gamepad via USART3 115200 8N1) -------------*/
-#define JOY_JOG_STEP_DEG        15.0f   /* degrees per L/R stick jog step         */
+#define JOY_JOG_STEP_DEG        10.0f   /* degrees per L/R step (Option 2 only)   */
+
+/* Option 1 — Velocity Bypass: joystick directly commands inner-loop velocity.
+   Tune JOY_JOG_VEL_RADS so the arm feels responsive but controllable.
+   At 1.0 rad/s ≈ 57°/s the arm traverses 360° in ~6 s.                      */
+#define JOY_JOG_VEL_RADS        1.0f    /* rad/s — direct velocity during L/R hold */
+
+/* Option 2 — Aggressive S-curve during discrete steps: each 10° step must
+   complete fast enough that the ZVD buffer is drained before the next command.
+   At Amax=150 rad/s² a 0.17 rad step finishes in < 80 ms at 100 Hz.         */
+#define JOG_STEP_AMAX_RADS2     150.0f  /* rad/s² — ~5× normal Amax during jog   */
+#define JOG_STEP_JMAX_RADS3    8000.0f  /* rad/s³ — ~6× normal Jmax during jog   */
 
 /* --- Pick & Place ---------------------------------------------------------*/
-#define P2P_INDEX_COUNT         10u     /* number of configurable index positions             */
+#define P2P_INDEX_COUNT         72u     /* 72 slots × 5° = 360° workspace                     */
 /* Home offset Modbus register (writable by PC, outside base-system range)   */
 #define MODBUS_REG_HOME_OFFSET  0x32u
+
+/* --- Auto-Tune Relay Feedback (Åström-Hägglund) ---------------------------*/
+/* Firmware holds still this many ms before activating the relay so the arm
+   damps any oscillations from the preceding move.
+   Must be <= RelayAnalyzer.settle_time_s × 1000 on the PC side.             */
+#define AT_SETTLE_MS            1000u
 
 #endif /* __PARAMS_H */

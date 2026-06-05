@@ -1,0 +1,12 @@
+# Auto-Tune Dashboard — additional dependencies
+# Install with: pip install -r requirements_autotune.txt
+
+# Existing (already in requirements.txt)
+pyserial>=3.5
+websockets>=10.0
+pymodbus>=3.0
+
+# New
+PyQt5>=5.15
+pyqtgraph>=0.13
+numpy>=1.24

@@ -15,10 +15,17 @@ void     UartDma_SetLpuartRxCb(UartRxCb_t cb);
 void     UartDma_SetUsart3RxCb(UartRxCb_t cb);
 
 /* TX — LPUART1 (TDM: Modbus + Telemetry on same wire)
-   SendModbus    : always queued if ring buffer has space
-   SendTelemetry : dropped if high-watermark exceeded OR T3.5 guard active */
+   SendModbus       : always queued if ring buffer has space
+   SendTelemetry    : dropped if high-watermark exceeded OR T3.5 guard active
+   SendTelemetry_T  : formats and queues one $T telemetry frame; ISR-safe;
+                      safe to call from Tick100Hz (TIM6 ISR context)         */
 bool     UartDma_SendModbus(const uint8_t *data, uint16_t len);
 bool     UartDma_SendTelemetry(const char *str);
+bool     UartDma_SendTelemetry_T(uint32_t ts_ms,
+                                  int16_t pos_x10,
+                                  int16_t vel_x10,
+                                  int16_t acc_x10,
+                                  int16_t co_x10);
 
 /* TX — USART3 (joystick/ESP32) */
 bool     UartDma_SendJoystick(const uint8_t *data, uint16_t len);

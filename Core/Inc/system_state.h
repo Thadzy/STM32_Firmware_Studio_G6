@@ -40,7 +40,7 @@ typedef struct {
 
     /* --- Motion (written by motor_controller from TIM6 ISR 1 kHz) -------- */
     struct {
-        volatile int32_t position_counts;   /* encoder counts from home      */
+        volatile int64_t position_counts;   /* encoder counts from home      */
         volatile float   velocity_rps;      /* revolutions per second        */
         volatile float   accel_rps2;        /* rev / s²                      */
         volatile int16_t motor_pwm;         /* current PWM command (-50…+50) */
@@ -75,6 +75,7 @@ typedef struct {
        dbg.joy_conn : 0=gamepad_not_paired  1=gamepad_connected
        dbg.pos_deg  : motor position in degrees (easier to read than position_counts)
        dbg.vel_dps  : velocity in degrees/s
+       dbg.safety   : software safety stack — config flags and trip status
     -------------------------------------------------------------------------- */
     struct {
         uint8_t  run_mode;
@@ -84,6 +85,21 @@ typedef struct {
         uint8_t  joy_conn;
         float    pos_deg;
         float    vel_dps;
+        uint16_t hb_age_ms; /* ms since last heartbeat register change */
+
+        /* Software Safety Stack -------------------------------------------
+           en_*     : set false to disable a guard during commissioning
+           tripped_*: latches true when the guard fires; clears on fault reset */
+        struct {
+            bool en_encoder_health;   /* guard: encoder disconnect detection  */
+            bool en_current_safety;   /* guard: persistent overcurrent fuse   */
+            bool en_tracking_safety;  /* guard: mechanical jam detection      */
+
+            bool tripped_encoder;     /* fault 0x40 — encoder disconnect      */
+            bool tripped_boundary;    /* fault 0x41 — cable / position limit  */
+            bool tripped_current;     /* fault 0x42 — overcurrent             */
+            bool tripped_tracking;    /* fault 0x43 — tracking / jam          */
+        } safety;
     } dbg;
 
 } RobotState_t;

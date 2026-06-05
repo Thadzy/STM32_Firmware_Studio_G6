@@ -15,7 +15,7 @@
 #define MB_FC_READ      0x03u
 #define MB_FC_WRITE1    0x06u
 #define MB_FC_WRITEN    0x10u
-#define MB_REG_COUNT    0x33u    /* 0x00 … 0x32 inclusive                   */
+#define MB_REG_COUNT    0x3Du    /* 0x00 … 0x3C inclusive (10 AT regs added) */
 #define MB_MIN_FRAME    4u       /* addr + fc + CRC (minimum valid frame)    */
 
 /* Heartbeat tokens (ASCII: "YA" = 22881, "HI" = 18537) */
@@ -29,6 +29,9 @@
 static uint16_t s_regs[MB_REG_COUNT];  /* shadow register bank              */
 static uint32_t s_hb_tick;             /* last heartbeat send time           */
 static bool     s_hb_pending;          /* YA sent, waiting for HI reply      */
+
+/* Auto-tune shared parameter block — extern declared in modbus_bridge.h    */
+AutoTune_Params_t g_at = { 0 };
 
 /* -------------------------------------------------------------------------
    CRC-16/Modbus
@@ -114,6 +117,41 @@ static void apply_reg_write(uint8_t addr, uint16_t val)
         else if (val == 0u) Gripper_SetVertical(true); /* Up  */
         if (val & 0x02u) Gripper_SetClaw(true);       /* Open  */
         if (val & 0x04u) Gripper_SetClaw(false);      /* Close */
+        break;
+
+    /* ---- Auto-tune WRITE registers 0x33–0x3A ----------------------------- */
+    case REG_AT_CMD:
+        /* Write cmd last so motor_controller never sees a partially-written
+           parameter block.  The ISR latches all params atomically at START.  */
+        g_at.cmd = (uint8_t)(val & 0xFFu);
+        break;
+
+    case REG_AT_RELAY_AMP:
+        g_at.amplitude   = (float)(int16_t)val / 10.0f;
+        break;
+
+    case REG_AT_SETPOINT:
+        g_at.setpoint    = (float)(int16_t)val / 10.0f;   /* degrees */
+        break;
+
+    case REG_AT_LOOP:
+        g_at.loop_target = (uint8_t)(val & 0x01u);
+        break;
+
+    case REG_AT_HYSTERESIS:
+        g_at.hysteresis  = (float)(int16_t)val / 100.0f;  /* degrees */
+        break;
+
+    case REG_AT_NEW_KP:
+        g_at.new_kp      = (float)(int16_t)val / 1000.0f;
+        break;
+
+    case REG_AT_NEW_KI:
+        g_at.new_ki      = (float)(int16_t)val / 1000.0f;
+        break;
+
+    case REG_AT_NEW_KD:
+        g_at.new_kd      = (float)(int16_t)val / 1000.0f;
         break;
 
     default:
@@ -246,4 +284,18 @@ void ModbusBridge_Tick(void)
     /* 0x31 — Emergency: bit0=estop, bits15-8=fault_code (for diagnostics)  */
     s_regs[0x31] = (g_robot.sensors.estop ? 0x0001u : 0x0000u)
                  | ((uint16_t)g_robot.comms.fault_code << 8);
+
+    /* --- Auto-Tune READ registers ---------------------------------------- */
+    /* 0x3B / 0x3C — mirror volatile fields written by TIM6 ISR              */
+    s_regs[REG_AT_STATUS] = (uint16_t)g_at.status;
+    s_regs[REG_AT_CYCLES] = g_at.cycles;
+
+    /* --- ApplyGains command (AT_CMD=2) — handled here in main-loop context
+       so that MotorCtrl_SetPidGains() runs outside ISR, allowing the brief
+       __disable_irq() critical section it uses.                             */
+    if (g_at.cmd == AT_CMD_APPLY_GAINS) {
+        MotorCtrl_SetPidGains(g_at.loop_target, g_at.new_kp, g_at.new_ki, g_at.new_kd);
+        g_at.cmd       = AT_CMD_IDLE;
+        s_regs[REG_AT_CMD] = AT_CMD_IDLE;
+    }
 }

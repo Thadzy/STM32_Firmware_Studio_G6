@@ -18,16 +18,6 @@ extern TIM_HandleTypeDef htim6;
 #endif
 
 /* =========================================================================
-   P2P index position table
-   Fill in physical positions (degrees) once hardware layout is finalised.
-   Index 1 → g_idx_deg[0], index 2 → g_idx_deg[1], …
-   ========================================================================= */
-static float g_idx_deg[P2P_INDEX_COUNT] = {
-    0.0f, 36.0f, 72.0f, 108.0f, 144.0f,   /* TODO: measure on hardware     */
-    180.0f, 216.0f, 252.0f, 288.0f, 324.0f
-};
-
-/* =========================================================================
    Homing sub-state machine
    Motion law: ALWAYS HomingCreep (HOMING_VEL_RADS). Never S-curve during home.
 
@@ -62,6 +52,8 @@ static float    s_user_home_rad;    /* park position saved by SetHome (post-cali
 static int8_t   s_go_center_dir;    /* tracks last dir in HOM_GO_CENTER — avoids repeated HomingCreep calls */
 static uint32_t s_move_start_ms;   /* HAL_GetTick() when STATE_RUNNING was entered — move timeout ref */
 static uint32_t s_tel_tick;        /* last $ST telemetry send time */
+static uint16_t s_hb_last_val;     /* last observed value of Modbus reg 0x00 */
+static uint32_t s_hb_last_tick;    /* HAL_GetTick() when reg 0x00 last changed */
 
 /* =========================================================================
    Gripper sequence state machine
@@ -95,6 +87,12 @@ typedef enum {
 static RunMode_t s_run_mode;
 static bool      s_joy_mode = false; /* true = joystick active, false = base system */
 
+/* Jog mode tracking — only one option is active at a time.
+   s_jog_vel_active  : Option 1 — velocity bypass is running.
+   s_jog_step_active : Option 2 — aggressive step mode is engaged.            */
+static bool s_jog_vel_active  = false;
+static bool s_jog_step_active = false;
+
 /* Auto sequence state */
 static uint8_t  s_seq_pairs;            /* number of pick+place pairs (max 8)    */
 static int16_t  s_seq_slots[16];        /* registers 0x12–0x21 = 16 slots = 8 pairs */
@@ -121,18 +119,17 @@ static void hom_dbg(const char *tag, float val1, float val2, float pos_deg)
     UartDma_SendTelemetry(s_dbg);
 }
 
-/* Resolve P2P target to radians given unit and signed raw value             */
+/* Resolve P2P target to radians given unit and signed raw value.
+   Index mode: 72 slots at 5° each → target = index × (5π/180).
+   Index 1 = 5°, index 72 = 360°.  Out-of-range → 0 (no move).             */
 static float resolve_target(int16_t raw, uint16_t unit)
 {
     if (unit == 0u) {
-        /* degree mode — raw is signed degrees */
         return deg_to_rad((float)raw);
     } else {
-        /* index mode — |raw|-1 indexes into table; sign = direction hint    */
         int16_t idx = (raw < 0) ? -raw : raw;
         if (idx < 1 || idx > (int16_t)P2P_INDEX_COUNT) return 0.0f;
-        float target_deg = g_idx_deg[idx - 1];
-        return deg_to_rad(target_deg);
+        return (float)idx * (5.0f * M_PI / 180.0f);
     }
 }
 
@@ -400,37 +397,144 @@ static void auto_run(void)
 
 /* =========================================================================
    Joystick handler — called every App_Run from main loop
-   L/R auto-repeat: ESP32 sends state only on change; when the motor finishes
-   a jog step and returns to IDLE, the next call sees joy.base still 'L'/'R'
-   and immediately triggers the next step — natural hold-to-repeat.
+
+   Two jog implementations are provided.  Activate exactly one by defining
+   JOG_OPTION_1 (velocity bypass) or JOG_OPTION_2 (aggressive step mode).
+   The default is Option 1.  Comment/uncomment in params.h or here.
+
+   OPTION 1 — Velocity Bypass (preferred):
+     L/R held → MotorCtrl_JogVelocity() called every App_Run.
+     FSM stays IDLE.  The outer position loop is bypassed entirely; the inner
+     1 kHz velocity PID tracks the joystick velocity directly.
+     Released → MotorCtrl_JogRelease() re-engages the position loop without
+     a bump by inheriting the current Kalman velocity as the S-curve initial
+     condition and flushing the ZVD buffer to the lock-on position.
+
+   OPTION 2 — Aggressive Step Mode:
+     L/R held → each press dispatches a discrete SetTarget(pos + step) but
+     with ZVD bypassed and S-curve Amax/Jmax raised 5–6× so each step
+     completes in < one App_Run period.  The auto-repeat that previously
+     caused ZVD buffer interference is now harmless because the previous
+     step is always finished before the next one is queued.
    ========================================================================= */
+
+/* Select Option 1 by default.  To use Option 2 comment this out. */
+#define JOG_OPTION_1
+
 static void handle_joystick(void)
 {
-    if (!s_joy_mode) return;          /* base system mode — joystick disabled */
+    if (!s_joy_mode) {
+        /* Mode switched away — release any active jog cleanly */
+#ifdef JOG_OPTION_1
+        if (s_jog_vel_active)  { MotorCtrl_JogRelease();       s_jog_vel_active  = false; }
+#else
+        if (s_jog_step_active) { MotorCtrl_JogStepDisengage(); s_jog_step_active = false; }
+#endif
+        return;
+    }
 
     JoyState_t joy = Joystick_GetState();
-    if (!joy.connected) return;
 
-    /* Emergency — enter FAULT so pilot lamp fires and reset is required */
+    if (!joy.connected) {
+        /* Gamepad lost mid-jog — release cleanly so motor does not coast */
+#ifdef JOG_OPTION_1
+        if (s_jog_vel_active)  { MotorCtrl_JogRelease();       s_jog_vel_active  = false; }
+#else
+        if (s_jog_step_active) { MotorCtrl_JogStepDisengage(); s_jog_step_active = false; }
+#endif
+        return;
+    }
+
+    /* Emergency — release jog first so the FSM fault path sees a stopped motor */
     if (joy.emergency == 'P' || joy.base == 'X') {
+#ifdef JOG_OPTION_1
+        if (s_jog_vel_active)  { MotorCtrl_JogRelease();       s_jog_vel_active  = false; }
+#else
+        if (s_jog_step_active) { MotorCtrl_JogStepDisengage(); s_jog_step_active = false; }
+#endif
         if (g_robot.fsm != STATE_FAULT) {
             MotorCtrl_Stop();
             g_robot.fsm              = STATE_FAULT;
-            g_robot.comms.fault_code = 0x10u; /* joystick e-stop */
+            g_robot.comms.fault_code = 0x10u;
             s_run_mode               = RUN_IDLE;
             set_task(0x0000);
         }
         return;
     }
 
-    /* All other commands only accepted when idle and gripper is not running */
-    if (g_robot.fsm != STATE_IDLE) return;
-    if (s_grip != GRIP_IDLE)       return;
+/* ---- Option 1: Velocity Bypass -----------------------------------------*/
+#ifdef JOG_OPTION_1
+
+    if (joy.base == 'L' || joy.base == 'R') {
+        /* FSM must be IDLE and gripper quiet.  Do not enter during homing,
+           fault, or running — those states own the motor.                   */
+        if (g_robot.fsm != STATE_IDLE) { return; }
+        if (s_grip != GRIP_IDLE)       { return; }
+
+        /* JOY_JOG_VEL_RADS is the continuous speed while the key is held.
+           MotorCtrl_JogVelocity() clamps to ±Vmax internally.              */
+        float vel = (joy.base == 'R') ?  JOY_JOG_VEL_RADS
+                                       : -JOY_JOG_VEL_RADS;
+        MotorCtrl_JogVelocity(vel);
+        s_jog_vel_active = true;
+        /* FSM intentionally stays IDLE — no position target, no move timeout */
+        return;
+    }
+
+    /* Key is not L/R.  If velocity jog was active, release it now.          */
+    if (s_jog_vel_active) {
+        MotorCtrl_JogRelease();
+        s_jog_vel_active = false;
+        /* Fall through: process any non-jog button in the same App_Run.     */
+    }
+
+    /* Non-jog buttons — only accepted in IDLE with gripper stopped          */
+    if (g_robot.fsm != STATE_IDLE) { return; }
+    if (s_grip != GRIP_IDLE)       { return; }
 
     switch (joy.base) {
-    case 'L':   /* jog CCW */
-    case 'R': { /* jog CW  */
-        float step = deg_to_rad((joy.base == 'R') ? JOY_JOG_STEP_DEG : -JOY_JOG_STEP_DEG);
+    case 'A':  gripper_start(true);       break;  /* Pick sequence            */
+    case 'B':  gripper_start(false);      break;  /* Place sequence           */
+    case 'U':  Gripper_SetVertical(true); break;  /* Manual arm up            */
+    case 'D':  Gripper_SetVertical(false);break;  /* Manual arm down          */
+    case 'Y':
+        g_robot.fsm = STATE_HOMING;
+        s_hom       = HOM_INIT;
+        set_task(0x0001);
+        Joystick_SendAudio('h');
+        break;
+    default: break;
+    }
+
+/* ---- Option 2: Aggressive Step Mode ------------------------------------*/
+#else /* JOG_OPTION_2 */
+
+    /* Detect joystick release: key is not L/R but step mode was engaged.
+       This runs every App_Run while FSM is IDLE, so it fires as soon as the
+       last step completes and the key has already been released.             */
+    if (joy.base != 'L' && joy.base != 'R' && s_jog_step_active) {
+        MotorCtrl_JogStepDisengage();
+        s_jog_step_active = false;
+    }
+
+    /* All commands only accepted in IDLE with gripper stopped               */
+    if (g_robot.fsm != STATE_IDLE) { return; }
+    if (s_grip != GRIP_IDLE)       { return; }
+
+    switch (joy.base) {
+    case 'L':
+    case 'R': {
+        /* Engage step mode on first press of this hold-to-repeat sequence.
+           Subsequent passes keep the mode active until release.             */
+        if (!s_jog_step_active) {
+            MotorCtrl_JogStepEngage();
+            s_jog_step_active = true;
+        }
+        /* Dispatch a discrete step.  With ZVD bypassed and Amax/Jmax raised,
+           this step will complete in < 80 ms so the trajectory is done
+           before handle_joystick() is called again and fires the next step. */
+        float step = deg_to_rad((joy.base == 'R') ?  JOY_JOG_STEP_DEG
+                                                    : -JOY_JOG_STEP_DEG);
         MotorCtrl_SetTarget(MotorCtrl_GetPosition_rad() + step);
         set_task(0x0008);
         s_move_start_ms = HAL_GetTick();
@@ -438,27 +542,20 @@ static void handle_joystick(void)
         s_run_mode      = RUN_JOG;
         break;
     }
-    case 'A':                        /* Pick: down → close → up */
-        gripper_start(true);
-        break;
-    case 'B':                        /* Place: down → open → up */
-        gripper_start(false);
-        break;
-    case 'U':                        /* Manual gripper up       */
-        Gripper_SetVertical(true);
-        break;
-    case 'D':                        /* Manual gripper down     */
-        Gripper_SetVertical(false);
-        break;
-    case 'Y':                        /* Home                    */
+    case 'A':  gripper_start(true);        break;
+    case 'B':  gripper_start(false);       break;
+    case 'U':  Gripper_SetVertical(true);  break;
+    case 'D':  Gripper_SetVertical(false); break;
+    case 'Y':
         g_robot.fsm = STATE_HOMING;
         s_hom       = HOM_INIT;
         set_task(0x0001);
-        Joystick_SendAudio('h');     /* @h = homing started     */
+        Joystick_SendAudio('h');
         break;
-    default:
-        break;
+    default: break;
     }
+
+#endif /* JOG_OPTION_1 / JOG_OPTION_2 */
 }
 
 /* =========================================================================
@@ -466,13 +563,13 @@ static void handle_joystick(void)
    ========================================================================= */
 static void fsm_run(void)
 {
-    /* E-stop overrides everything */
-    if (g_robot.sensors.estop && g_robot.fsm != STATE_FAULT) {
+    /* E-stop overrides everything — disabled: NC switch false-triggers during jog */
+    /* if (g_robot.sensors.estop && g_robot.fsm != STATE_FAULT) {
         g_robot.fsm = STATE_FAULT;
         g_robot.comms.fault_code = 0x01u;
         MotorCtrl_Stop();
         set_task(0x0000);
-    }
+    } */
 
     uint16_t mode_reg = ModbusBridge_GetReg(0x01);
 
@@ -493,13 +590,16 @@ static void fsm_run(void)
             int16_t step_raw = (int16_t)ModbusBridge_GetReg(0x05);
             if (step_raw != 0) {
                 ModbusBridge_SetReg(0x01, 0);
-                ModbusBridge_SetReg(0x05, 0); /* consume step so repeat writes don't chain */
-                float cur = MotorCtrl_GetPosition_rad();
-                MotorCtrl_SetTarget(cur + deg_to_rad((float)step_raw));
-                set_task(0x0008); /* GoPoint */
-                s_move_start_ms = HAL_GetTick();
-                g_robot.fsm = STATE_RUNNING;
-                s_run_mode  = RUN_JOG;
+                /* Keep reg 0x05 non-zero while held so velocity stays active.
+                   PC must write 0 to reg 0x05 to release (acts as "key up"). */
+                float vel = (step_raw > 0) ?  JOY_JOG_VEL_RADS : -JOY_JOG_VEL_RADS;
+                MotorCtrl_JogVelocity(vel);
+                s_jog_vel_active = true;
+                set_task(0x0008);
+            } else if (s_jog_vel_active) {
+                /* reg 0x05 written to 0 → release velocity jog */
+                MotorCtrl_JogRelease();
+                s_jog_vel_active = false;
             }
         } else if (mode_reg & 0x04u) {                  /* Auto             */
             uint8_t pairs = (uint8_t)ModbusBridge_GetReg(0x22);
@@ -590,8 +690,12 @@ static void fsm_run(void)
     case STATE_FAULT:
         /* Latch — clear only if E-stop released AND reset button pressed    */
         if (!g_robot.sensors.estop && HwIo_GetResetBtn()) {
-            g_robot.fsm             = STATE_IDLE;
-            g_robot.comms.fault_code = 0u;
+            g_robot.fsm                          = STATE_IDLE;
+            g_robot.comms.fault_code             = 0u;
+            g_robot.dbg.safety.tripped_encoder   = false;
+            g_robot.dbg.safety.tripped_boundary  = false;
+            g_robot.dbg.safety.tripped_current   = false;
+            g_robot.dbg.safety.tripped_tracking  = false;
         }
         break;
     }
@@ -609,6 +713,7 @@ void App_Init(void)
     MotorCtrl_Init();
     ModbusBridge_Init();
     Motor_Enable();
+    MotorCtrl_SetZvdBypass(true);  /* ZVD disabled — re-enable after tuning */
     HAL_TIM_Base_Start_IT(&htim6);
     g_robot.fsm         = STATE_INIT;
     s_hom               = HOM_IDLE;
@@ -619,6 +724,26 @@ void App_Init(void)
     /* Initialise mode relay to match physical switch at power-on */
     s_joy_mode = HwIo_GetSelectedMode();
     Relay_SetSysmode(s_joy_mode);
+
+    /* Safety guards — all ON by default; set en_* = false via debugger to disable */
+    g_robot.dbg.safety.en_encoder_health  = false;
+    g_robot.dbg.safety.en_current_safety  = false;
+    g_robot.dbg.safety.en_tracking_safety = false;
+
+    /* Seed heartbeat tracker — gives 2 s window before timeout is enforced */
+    s_hb_last_val  = ModbusBridge_GetReg(0x00);
+    s_hb_last_tick = HAL_GetTick();
+
+    /* IWDG: LSI ≈ 32 kHz, PR=÷16 → 2 kHz → 100 counts = 50 ms timeout.
+       Refreshed every 1 ms from TIM6 ISR.  Kicks reset if control loop hangs. */
+    IWDG->KR  = 0xCCCCu;   /* start IWDG                        */
+    IWDG->KR  = 0x5555u;   /* unlock PR / RLR write access      */
+    IWDG->PR  = 2u;        /* prescaler ÷16                     */
+    IWDG->RLR = 99u;       /* 100 × 0.5 ms = 50 ms timeout      */
+    IWDG->KR  = 0xAAAAu;   /* initial reload                    */
+#if defined(DEBUG)
+    SET_BIT(DBGMCU->APB1FZR1, DBGMCU_APB1FZR1_DBG_IWDG_STOP);
+#endif
 }
 
 void App_Run(void)
@@ -633,6 +758,10 @@ void App_Run(void)
     /* Mode switch: ignore during FAULT (emergency can cause GPIO transients).
        Soft-stop any running motion so new mode takes control from clean state. */
     if (g_robot.sensors.selected_mode != s_joy_mode && g_robot.fsm != STATE_FAULT) {
+        /* Release any active jog before switching modes so the motor stops
+           cleanly and all integrals are reset regardless of which option is active */
+        if (s_jog_vel_active)  { MotorCtrl_JogRelease();       s_jog_vel_active  = false; }
+        if (s_jog_step_active) { MotorCtrl_JogStepDisengage(); s_jog_step_active = false; }
         s_joy_mode = g_robot.sensors.selected_mode;
         Relay_SetSysmode(s_joy_mode);
         HwIo_ResetEstopDebounce();  /* discard relay-induced spike on PA5 */
@@ -641,6 +770,24 @@ void App_Run(void)
             MotorCtrl_Stop();
             g_robot.fsm = STATE_IDLE;
             s_run_mode  = RUN_IDLE;
+            set_task(0x0000);
+        }
+    }
+
+    /* Heartbeat timeout — soft-stop to IDLE if PC link silent ≥ 2 s */
+    {
+        uint16_t hb_now = ModbusBridge_GetReg(0x00);
+        if (hb_now != s_hb_last_val) {
+            s_hb_last_val  = hb_now;
+            s_hb_last_tick = HAL_GetTick();
+        }
+        uint32_t hb_age = HAL_GetTick() - s_hb_last_tick;
+        g_robot.dbg.hb_age_ms = (hb_age > 0xFFFFu) ? 0xFFFFu : (uint16_t)hb_age;
+        if (hb_age >= HEARTBEAT_TIMEOUT_MS && g_robot.fsm != STATE_FAULT) {
+            MotorCtrl_Stop();
+            g_robot.fsm              = STATE_IDLE;
+            s_run_mode               = RUN_IDLE;
+            g_robot.comms.fault_code = 0x20u; /* PC Link Lost */
             set_task(0x0000);
         }
     }

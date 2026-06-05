@@ -4,6 +4,9 @@
 #include "system_state.h"
 #include "params.h"
 #include "main.h"
+#include "modbus_bridge.h"       /* g_at, AT_CMD_*, AT_LOOP_*, AT_STATUS_*    */
+#include "uart_dma_manager.h"    /* UartDma_SendTelemetry_T()                 */
+#include "test_phase2_safety.h"  /* g_test_inj injection hooks for commissioning */
 #include <math.h>
 #include <string.h>
 
@@ -35,7 +38,7 @@ typedef struct {
    Module-private state
    ------------------------------------------------------------------------- */
 static KalmanState_t s_kalman;
-static int32_t       s_pos_counts;
+static int64_t       s_pos_counts;
 static uint16_t      s_last_enc;
 
 /* Velocity setpoint passed from outer loop to inner loop */
@@ -45,6 +48,23 @@ static volatile float s_acc_sp;
 /* Homing creep mode — bypasses S-curve and position PID */
 static volatile bool  s_homing_mode;
 static volatile float s_homing_vel;
+
+/* ---- Option 1: Velocity bypass jog ----------------------------------------
+   s_jog_active   : true  → Tick100Hz feeds s_jog_vel_cmd directly to inner loop,
+                            skipping S-curve, ZVD, and the position PID entirely.
+   s_jog_vel_cmd  : velocity setpoint (rad/s) commanded by the joystick.
+                    Written from main-loop (JogVelocity), read in Tick100Hz ISR.
+                    Declared volatile so the compiler does not cache it in a register
+                    across the ISR boundary.                                       */
+static volatile bool  s_jog_active;
+static volatile float s_jog_vel_cmd;
+
+/* ---- Option 2: Runtime S-curve limits (aggressive during jog stepping) ----
+   Replacing the compile-time macros with runtime scalars lets JogStepEngage /
+   JogStepDisengage raise and restore Amax / Jmax without a recompile.
+   Initialised to the hardware-identified values in MotorCtrl_Init().           */
+static float s_sc_amax;   /* current Amax (rad/s²) used by scurve_step()       */
+static float s_sc_jmax;   /* current Jmax (rad/s³) used by scurve_step()       */
 
 /* Speed PID state */
 static float s_spd_integral;
@@ -64,6 +84,61 @@ static bool s_running;
 static bool s_zvd_bypass;  /* true during homing — no rod, no need for input shaping */
 
 /* -------------------------------------------------------------------------
+   Live-adjustable PID gains
+   Initialised from params.h constants; updated by MotorCtrl_SetPidGains().
+   Read from TIM6 ISR; written from main-loop inside a __disable_irq guard.
+   ------------------------------------------------------------------------- */
+static float s_pid_spd_kp = PID_SPEED_KP;
+static float s_pid_spd_ki = PID_SPEED_KI;
+static float s_pid_spd_kd = PID_SPEED_KD;
+static float s_pid_pos_kp = PID_POS_KP;
+static float s_pid_pos_ki = PID_POS_KI;
+static float s_pid_pos_kd = PID_POS_KD;
+
+/* -------------------------------------------------------------------------
+   Auto-tune relay state machine
+   State lives here; g_at (modbus_bridge) holds the cross-module parameters.
+   ------------------------------------------------------------------------- */
+typedef enum {
+    AT_SM_IDLE     = 0,
+    AT_SM_SETTLING = 1,
+    AT_SM_ACTIVE   = 2,
+} AtSm_t;
+
+static AtSm_t   s_at_sm;
+static uint8_t  s_at_loop;        /* latched AT_LOOP_* at relay start        */
+static float    s_at_sp_rad;      /* latched setpoint, radians               */
+static float    s_at_amp;         /* latched amplitude (rad/s or PWM)        */
+static float    s_at_hyst_rad;    /* latched hysteresis, radians             */
+static int8_t   s_at_sign;        /* current relay output polarity (+1/-1)   */
+static uint16_t s_at_half_cyc;    /* relay sign-flips since ACTIVE           */
+static uint32_t s_at_settle_t0;   /* HAL_GetTick() when SETTLING began       */
+
+/* Telemetry formatting buffer — written only from Tick100Hz (TIM6 ISR),
+   so single-context; no re-entrancy concern.                                */
+static char s_tel_buf[64];
+
+/* -------------------------------------------------------------------------
+   Software safety stack — 1-ms persistence counters
+   ------------------------------------------------------------------------- */
+static uint16_t s_enc_stall_cnt;    /* encoder health: ticks at high PWM + zero delta  */
+static uint16_t s_overcurrent_cnt;  /* current fuse:   ticks above CURRENT_FAULT_AMPS  */
+static uint16_t s_tracking_err_cnt; /* tracking error: ticks with |target−pos| > 10°   */
+
+static void safety_trip(uint8_t code)
+{
+    s_vel_sp       = 0.0f;
+    s_acc_sp       = 0.0f;
+    s_spd_integral = 0.0f;
+    s_running      = false;
+    Motor_SetPWM(0);
+    if (g_robot.fsm != STATE_FAULT) {
+        g_robot.fsm              = STATE_FAULT;
+        g_robot.comms.fault_code = code;
+    }
+}
+
+/* -------------------------------------------------------------------------
    S-curve helpers
    ------------------------------------------------------------------------- */
 
@@ -73,16 +148,15 @@ static float scurve_stop_dist(float vel, float acc)
 {
     if (vel <= 0.0f) return 0.0f;
 
-    /* Phase A: reduce acc to 0 via -Jmax if acc is positive */
-    float t_a = (acc > 0.0f) ? acc / SCURVE_JMAX_RADS3 : 0.0f;
-    float v_a = vel + acc * t_a - 0.5f * SCURVE_JMAX_RADS3 * t_a * t_a;
+    /* Uses runtime s_sc_jmax / s_sc_amax so Option-2 jog can raise limits
+       without changing the stopping-distance calculation logic.              */
+    float t_a = (acc > 0.0f) ? acc / s_sc_jmax : 0.0f;
+    float v_a = vel + acc * t_a - 0.5f * s_sc_jmax * t_a * t_a;
     float d_a = vel * t_a + 0.5f * acc * t_a * t_a
-                - (1.0f / 6.0f) * SCURVE_JMAX_RADS3 * t_a * t_a * t_a;
+                - (1.0f / 6.0f) * s_sc_jmax * t_a * t_a * t_a;
 
-    /* Phase B+C: decelerate v_a to 0 (conservative — ignores jerk-limited
-       nature of decel, compensated by 1.5× safety factor)                   */
     float d_bc = (v_a > 0.0f)
-                 ? v_a * v_a / (2.0f * SCURVE_AMAX_RADS2) * 1.5f
+                 ? v_a * v_a / (2.0f * s_sc_amax) * 1.5f
                  : 0.0f;
 
     return d_a + d_bc;
@@ -110,24 +184,23 @@ static void scurve_step(float dt)
 
     float stop_dist = scurve_stop_dist(vel_dir, acc_dir);
 
+    /* Runtime limits: s_sc_amax / s_sc_jmax are the defaults from params.h
+       during normal operation.  JogStepEngage() raises them temporarily for
+       Option-2 discrete stepping so each step completes before the next     */
     float jerk;
     if (abs_dist <= stop_dist) {
-        /* Braking zone */
-        jerk = -SCURVE_JMAX_RADS3 * dir;
+        jerk = -s_sc_jmax * dir;
     } else if (vel_dir >= SCURVE_VMAX_RADS - 0.01f) {
-        /* At cruise velocity — bring acc to 0 */
-        jerk = (acc_dir > 0.01f) ? -SCURVE_JMAX_RADS3 * dir : 0.0f;
-    } else if (acc_dir < SCURVE_AMAX_RADS2 - 0.01f) {
-        /* Still below Amax — accelerate */
-        jerk = SCURVE_JMAX_RADS3 * dir;
+        jerk = (acc_dir > 0.01f) ? -s_sc_jmax * dir : 0.0f;
+    } else if (acc_dir < s_sc_amax - 0.01f) {
+        jerk = s_sc_jmax * dir;
     } else {
-        /* Holding Amax */
         jerk = 0.0f;
     }
 
     s_sc.acc += jerk * dt;
-    if (s_sc.acc >  SCURVE_AMAX_RADS2) s_sc.acc =  SCURVE_AMAX_RADS2;
-    if (s_sc.acc < -SCURVE_AMAX_RADS2) s_sc.acc = -SCURVE_AMAX_RADS2;
+    if (s_sc.acc >  s_sc_amax) s_sc.acc =  s_sc_amax;
+    if (s_sc.acc < -s_sc_amax) s_sc.acc = -s_sc_amax;
 
     s_sc.vel += s_sc.acc * dt;
     if (s_sc.vel >  SCURVE_VMAX_RADS) s_sc.vel =  SCURVE_VMAX_RADS;
@@ -139,6 +212,26 @@ static void scurve_step(float dt)
 /* -------------------------------------------------------------------------
    Public API
    ------------------------------------------------------------------------- */
+
+void MotorCtrl_SetPidGains(uint8_t loop, float kp, float ki, float kd)
+{
+    /* Three-float update must be atomic relative to TIM6 ISR reads.
+       __disable_irq disables all maskable interrupts; the window is
+       3 × STR instructions ≈ 18 ns at 170 MHz — negligible jitter.         */
+    __disable_irq();
+    if (loop == AT_LOOP_POSITION) {
+        s_pid_pos_kp   = kp;
+        s_pid_pos_ki   = ki;
+        s_pid_pos_kd   = kd;
+        s_pos_integral = 0.0f;   /* bumpless transition */
+    } else {
+        s_pid_spd_kp   = kp;
+        s_pid_spd_ki   = ki;
+        s_pid_spd_kd   = kd;
+        s_spd_integral = 0.0f;
+    }
+    __enable_irq();
+}
 
 void MotorCtrl_Init(void)
 {
@@ -153,9 +246,33 @@ void MotorCtrl_Init(void)
     s_spd_prev_err = 0.0f;
     s_pos_integral = 0.0f;
     s_pos_prev_meas = 0.0f;
-    s_zvd_head     = 0;
-    s_settle_ticks = 0;
-    s_running      = false;
+    s_zvd_head         = 0;
+    s_settle_ticks     = 0;
+    s_running          = false;
+    s_enc_stall_cnt    = 0;
+    s_overcurrent_cnt  = 0;
+    s_tracking_err_cnt = 0;
+
+    /* Jog state — both options start disengaged */
+    s_jog_active   = false;
+    s_jog_vel_cmd  = 0.0f;
+
+    /* Runtime S-curve limits — match hardware-identified defaults */
+    s_sc_amax = SCURVE_AMAX_RADS2;
+    s_sc_jmax = SCURVE_JMAX_RADS3;
+
+    /* Auto-tune relay state */
+    s_at_sm      = AT_SM_IDLE;
+    s_at_sign    = 1;
+    s_at_half_cyc = 0;
+
+    /* Restore live PID gains to params.h defaults on re-init */
+    s_pid_spd_kp = PID_SPEED_KP;
+    s_pid_spd_ki = PID_SPEED_KI;
+    s_pid_spd_kd = PID_SPEED_KD;
+    s_pid_pos_kp = PID_POS_KP;
+    s_pid_pos_ki = PID_POS_KI;
+    s_pid_pos_kd = PID_POS_KD;
 
     /* Capture current encoder position as position 0 */
     HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
@@ -175,10 +292,22 @@ void MotorCtrl_SetTarget(float target_rad)
 
 void MotorCtrl_Stop(void)
 {
-    s_vel_sp   = 0.0f;
-    s_acc_sp   = 0.0f;
-    s_running  = false;
+    s_vel_sp           = 0.0f;
+    s_acc_sp           = 0.0f;
+    s_spd_integral     = 0.0f;
+    s_pos_integral     = 0.0f;
+    s_running          = false;
     Motor_SetPWM(0);
+    /* Re-seed S-curve from current position so the next SetTarget starts clean */
+    float cur       = s_kalman.x[0];
+    s_sc.pos        = cur;
+    s_sc.vel        = 0.0f;
+    s_sc.acc        = 0.0f;
+    s_sc.target     = cur;
+    s_sc.done       = true;
+    s_enc_stall_cnt    = 0;
+    s_overcurrent_cnt  = 0;
+    s_tracking_err_cnt = 0;
 }
 
 bool MotorCtrl_IsAtTarget(void)
@@ -237,7 +366,7 @@ void MotorCtrl_Zero(float home_offset_rad)
     /* Redefine the current physical position as home + offset.
        All PID/Kalman state is re-seeded from the new origin.                */
     s_homing_mode  = false;
-    s_pos_counts   = (int32_t)(home_offset_rad * RAD_TO_COUNTS);
+    s_pos_counts   = (int64_t)(home_offset_rad * RAD_TO_COUNTS);
     Kalman_Init(&s_kalman, home_offset_rad);
     s_sc.pos       = home_offset_rad;
     s_sc.vel       = 0.0f;
@@ -273,16 +402,21 @@ void MotorCtrl_Tick1kHz(void)
     uint16_t enc   = (uint16_t)__HAL_TIM_GET_COUNTER(&htim3);
     int16_t  delta = (int16_t)(enc - s_last_enc);
     s_last_enc     = enc;
-    s_pos_counts  += (int32_t)delta * ENCODER_DIRECTION;
 
-    /* --- Cable-limit hard stop ------------------------------------------- */
+    /* [HOOK A] Guard 1 — suppress delta to simulate encoder cable disconnect */
+    if (g_test_inj.inject_enc_stall) { delta = 0; }
+
+    s_pos_counts  += (int64_t)delta * ENCODER_DIRECTION;
+
+    /* [HOOK B] Guard 2 — force position past cable limit */
+    if (g_test_inj.inject_boundary) {
+        s_pos_counts = (int64_t)CABLE_MAX_COUNTS + 1;
+    }
+
+    /* --- Boundary guard (Guard 2) — always active, no enable flag ---------- */
     if (s_pos_counts >  CABLE_MAX_COUNTS || s_pos_counts < -CABLE_MAX_COUNTS) {
-        s_vel_sp       = 0.0f;
-        s_acc_sp       = 0.0f;
-        s_spd_integral = 0.0f;
-        s_running      = false;
-        Motor_SetPWM(0);
-        g_robot.fsm    = STATE_FAULT;
+        safety_trip(0x41u);
+        g_robot.dbg.safety.tripped_boundary = true;
         return;
     }
 
@@ -295,10 +429,83 @@ void MotorCtrl_Tick1kHz(void)
     g_robot.motion.velocity_rps    = s_kalman.x[1] / (2.0f * M_PI);
     g_robot.motion.accel_rps2      = s_kalman.x[2] / (2.0f * M_PI);
 
-    /* --- 4. Inner velocity PID + feedforward ------------------------------ */
+    /* --- 4a. Auto-tune VELOCITY relay (inner loop, AT_LOOP_VELOCITY) ------- *
+     * Intercepts here — after Kalman, before normal PID.  E-stop guard above *
+     * already returned so no double-guard needed.                             *
+     * ────────────────────────────────────────────────────────────────────── */
+    if (g_at.cmd == AT_CMD_START_RELAY && g_at.loop_target == AT_LOOP_VELOCITY) {
+
+        /* ── Abort / cleanup (relay was active, cmd now cleared) ─────────── */
+        if (s_at_sm != AT_SM_IDLE && g_at.cmd != AT_CMD_START_RELAY) {
+            /* unreachable here since cmd IS START_RELAY, kept for symmetry   */
+        }
+
+        /* ── Edge trigger: transition IDLE → SETTLING ───────────────────── */
+        if (s_at_sm == AT_SM_IDLE) {
+            s_at_loop      = AT_LOOP_VELOCITY;
+            s_at_amp       = g_at.amplitude;                         /* PWM   */
+            s_at_sp_rad    = g_at.setpoint;                          /* rad/s */
+            s_at_hyst_rad  = g_at.hysteresis;                        /* rad/s */
+            s_at_sign      = 1;
+            s_at_half_cyc  = 0;
+            s_at_settle_t0 = HAL_GetTick();
+            s_at_sm        = AT_SM_SETTLING;
+            g_at.status    = AT_STATUS_SETTLING;
+            g_at.cycles    = 0;
+        }
+
+        /* ── SETTLING: hold PWM=0 until settle window elapses ───────────── */
+        if (s_at_sm == AT_SM_SETTLING) {
+            if ((HAL_GetTick() - s_at_settle_t0) >= AT_SETTLE_MS) {
+                s_at_sm     = AT_SM_ACTIVE;
+                g_at.status = AT_STATUS_ACTIVE;
+            }
+            Motor_SetPWM(0);
+            return;
+        }
+
+        /* ── ACTIVE: bang-bang relay with hysteresis ─────────────────────── */
+        if (s_at_sm == AT_SM_ACTIVE) {
+            float pv  = s_kalman.x[1];                /* Kalman velocity, rad/s */
+            float err = s_at_sp_rad - pv;
+
+            if (s_at_sign > 0 && err < -(s_at_hyst_rad * 0.5f)) {
+                s_at_sign = -1;
+                s_at_half_cyc++;
+            } else if (s_at_sign < 0 && err > (s_at_hyst_rad * 0.5f)) {
+                s_at_sign = 1;
+                s_at_half_cyc++;
+            }
+            g_at.cycles = s_at_half_cyc >> 1u;        /* complete cycles     */
+
+            int16_t pwm = (int16_t)lroundf((float)s_at_sign * s_at_amp);
+            if (pwm >  (int16_t)MOTOR_PWM_MAX) pwm =  (int16_t)MOTOR_PWM_MAX;
+            if (pwm < -(int16_t)MOTOR_PWM_MAX) pwm = -(int16_t)MOTOR_PWM_MAX;
+            g_robot.motion.motor_pwm = pwm;
+            Motor_SetPWM(pwm);
+            return;
+        }
+    } else if (s_at_sm != AT_SM_IDLE && s_at_loop == AT_LOOP_VELOCITY) {
+        /* Relay was running on velocity loop but cmd was cleared → safe stop */
+        s_at_sm        = AT_SM_IDLE;
+        g_at.status    = AT_STATUS_IDLE;
+        s_vel_sp       = 0.0f;
+        s_acc_sp       = 0.0f;
+        s_spd_integral = 0.0f;
+        Motor_SetPWM(0);
+    }
+
+    /* --- 4b. Normal inner velocity PID + feedforward ---------------------- */
     if (!s_running) {
         Motor_SetPWM(0);
         return;
+    }
+
+    /* [HOOK C] Guard 4 — sustain a large Kalman position error to simulate jam.
+       Placed after the !s_running gate so s_sc.done is still visible to the
+       tracking guard that runs further below.                                 */
+    if (g_test_inj.inject_tracking_error) {
+        s_kalman.x[0] = s_sc.target + 0.30f;
     }
 
     float vel_actual = s_kalman.x[1];
@@ -316,9 +523,9 @@ void MotorCtrl_Tick1kHz(void)
     float der = (vel_err - s_spd_prev_err) / DT_INNER;
     s_spd_prev_err = vel_err;
 
-    float u = PID_SPEED_KP  * vel_err
-            + PID_SPEED_KI  * s_spd_integral
-            + PID_SPEED_KD  * der
+    float u = s_pid_spd_kp * vel_err          /* live-adjustable gains       */
+            + s_pid_spd_ki * s_spd_integral
+            + s_pid_spd_kd * der
             + u_ff;
 
     /* Clamp and apply — round (not truncate) so sub-1 values reach motor */
@@ -328,6 +535,60 @@ void MotorCtrl_Tick1kHz(void)
     int16_t pwm = (int16_t)lroundf(u);
     g_robot.motion.motor_pwm = pwm;
     Motor_SetPWM(pwm);
+
+    /* --- Software Safety Stack ------------------------------------------- */
+
+    /* Guard 1: Encoder health — detect broken/disconnected encoder cable.
+       If the motor is being driven (|PWM| > threshold) but the encoder shows
+       no movement for SAFETY_ENC_STALL_MS consecutive ticks → fault 0x40.   */
+    if (g_robot.dbg.safety.en_encoder_health) {
+        if ((pwm > SAFETY_ENC_STALL_PWM || pwm < -SAFETY_ENC_STALL_PWM) && delta == 0) {
+            if (++s_enc_stall_cnt >= SAFETY_ENC_STALL_MS) {
+                safety_trip(0x40u);
+                g_robot.dbg.safety.tripped_encoder = true;
+                s_enc_stall_cnt = 0;
+            }
+        } else {
+            s_enc_stall_cnt = 0;
+        }
+    } else {
+        s_enc_stall_cnt = 0;
+    }
+
+    /* Guard 3: Persistent current fuse — overcurrent jam / stall detection.
+       100 ms persistence filters WCS1800 sensor noise and motion transients. */
+    if (g_robot.dbg.safety.en_current_safety) {
+        if (g_robot.sensors.current_amps > CURRENT_FAULT_AMPS) {
+            if (++s_overcurrent_cnt >= SAFETY_CURRENT_MS) {
+                safety_trip(0x42u);
+                g_robot.dbg.safety.tripped_current = true;
+                s_overcurrent_cnt = 0;
+            }
+        } else {
+            s_overcurrent_cnt = 0;
+        }
+    } else {
+        s_overcurrent_cnt = 0;
+    }
+
+    /* Guard 4: Tracking error — mechanical jam after move completes.
+       Gate on s_sc.done: during cruise the cascade lag can exceed 100°, so
+       checking mid-move would false-trip.  After the S-curve finishes the arm
+       must settle within SAFETY_TRACKING_DEG in SAFETY_TRACKING_MS ticks.   */
+    if (g_robot.dbg.safety.en_tracking_safety && !s_homing_mode && s_sc.done) {
+        float err_rad = fabsf(s_sc.target - s_kalman.x[0]);
+        if (err_rad > SAFETY_TRACKING_DEG * (M_PI / 180.0f)) {
+            if (++s_tracking_err_cnt >= SAFETY_TRACKING_MS) {
+                safety_trip(0x43u);
+                g_robot.dbg.safety.tripped_tracking = true;
+                s_tracking_err_cnt = 0;
+            }
+        } else {
+            s_tracking_err_cnt = 0;
+        }
+    } else {
+        s_tracking_err_cnt = 0;
+    }
 }
 
 /* -------------------------------------------------------------------------
@@ -335,7 +596,104 @@ void MotorCtrl_Tick1kHz(void)
    ------------------------------------------------------------------------- */
 void MotorCtrl_Tick100Hz(void)
 {
-    if (!s_running) return;
+    /* =========================================================
+       Auto-tune POSITION relay (outer loop, AT_LOOP_POSITION)
+
+       Placed BEFORE the s_running gate so the relay can run
+       even when no normal trajectory is active.
+
+       ISR time budget: relay logic ~200 ns, telemetry snprintf
+       ~4 µs — total < 0.05 % of the 10 ms outer-loop window.
+       ========================================================= */
+
+    if (g_at.cmd == AT_CMD_START_RELAY && g_at.loop_target == AT_LOOP_POSITION) {
+
+        /* ── Edge trigger: IDLE → SETTLING ──────────────────────────── */
+        if (s_at_sm == AT_SM_IDLE) {
+            s_at_loop     = AT_LOOP_POSITION;
+            s_at_amp      = g_at.amplitude;                     /* rad/s */
+            s_at_sp_rad   = g_at.setpoint * (M_PI / 180.0f);   /* rad   */
+            s_at_hyst_rad = g_at.hysteresis * (M_PI / 180.0f); /* rad   */
+            s_at_sign     = 1;
+            s_at_half_cyc = 0;
+            s_at_settle_t0 = HAL_GetTick();
+            s_at_sm       = AT_SM_SETTLING;
+            g_at.status   = AT_STATUS_SETTLING;
+            g_at.cycles   = 0;
+        }
+
+        /* ── SETTLING: hold velocity command to 0 ────────────────────── */
+        if (s_at_sm == AT_SM_SETTLING) {
+            if ((HAL_GetTick() - s_at_settle_t0) >= AT_SETTLE_MS) {
+                s_at_sm     = AT_SM_ACTIVE;
+                g_at.status = AT_STATUS_ACTIVE;
+            }
+            s_vel_sp = 0.0f;
+            s_acc_sp = 0.0f;
+            goto send_telemetry;   /* still emit telemetry during settle    */
+        }
+
+        /* ── ACTIVE: bang-bang relay with hysteresis ─────────────────── */
+        if (s_at_sm == AT_SM_ACTIVE) {
+            float pv  = s_kalman.x[0];              /* Kalman position, rad */
+            float err = s_at_sp_rad - pv;
+
+            /* Schmitt-trigger relay switching */
+            if (s_at_sign > 0 && err < -(s_at_hyst_rad * 0.5f)) {
+                s_at_sign = -1;
+                s_at_half_cyc++;
+            } else if (s_at_sign < 0 && err > (s_at_hyst_rad * 0.5f)) {
+                s_at_sign = 1;
+                s_at_half_cyc++;
+            }
+            g_at.cycles = s_at_half_cyc >> 1u;     /* complete cycles       */
+
+            /* Directly command velocity setpoint — inner PID does the rest */
+            s_vel_sp = (float)s_at_sign * s_at_amp;
+            s_acc_sp = 0.0f;
+            goto send_telemetry;
+        }
+
+    } else if (s_at_sm != AT_SM_IDLE && s_at_loop == AT_LOOP_POSITION) {
+        /* cmd cleared (Abort or Idle) while position relay was running      */
+        s_at_sm        = AT_SM_IDLE;
+        g_at.status    = AT_STATUS_IDLE;
+        s_vel_sp       = 0.0f;
+        s_acc_sp       = 0.0f;
+        s_spd_integral = 0.0f;
+        s_pos_integral = 0.0f;
+        Motor_SetPWM(0);
+        /* Fall through to normal path — s_running will gate correctly      */
+    }
+
+    if (!s_running) goto send_telemetry;
+
+    /* ====================================================================
+       OPTION 1 — Velocity Bypass Jog
+       When s_jog_active is true the entire outer loop (S-curve trajectory,
+       ZVD shaper, position PID) is bypassed.  The joystick velocity command
+       is written directly to s_vel_sp so the inner 1 kHz velocity PID
+       tracks it without position-loop interference.
+
+       Integral housekeeping (critical for bump-less re-engagement):
+         s_pos_integral  : zeroed every outer tick.  If we let it accumulate
+                           while the motor drifts under velocity control the
+                           position PID would fire a large correction burst
+                           the moment JogRelease() re-engages the outer loop.
+         s_pos_prev_meas : updated to the current Kalman position every tick.
+                           This pre-seeds the derivative-on-measurement term
+                           so d/dt(pos_actual) = 0 on the first post-jog tick
+                           rather than reflecting the full position change
+                           since the last time the outer loop was active
+                           (derivative kick prevention).
+       ==================================================================== */
+    if (s_jog_active) {
+        s_pos_integral  = 0.0f;
+        s_pos_prev_meas = s_kalman.x[0];
+        s_vel_sp        = s_jog_vel_cmd;
+        s_acc_sp        = 0.0f;
+        goto send_telemetry;
+    }
 
     /* --- 1. Step S-curve trajectory -------------------------------------- */
     scurve_step(DT_OUTER);
@@ -371,7 +729,7 @@ void MotorCtrl_Tick100Hz(void)
         else if (s_vel_sp > s_homing_vel)
             s_vel_sp = (s_vel_sp - ramp > s_homing_vel) ? s_vel_sp - ramp : s_homing_vel;
         s_acc_sp = 0.0f;
-        return;
+        goto send_telemetry;
     }
 
     /* --- 4. Outer position PID (derivative on measurement) --------------- */
@@ -385,9 +743,9 @@ void MotorCtrl_Tick100Hz(void)
     float d_meas = -(pos_actual - s_pos_prev_meas) * (float)OUTER_LOOP_HZ;
     s_pos_prev_meas = pos_actual;
 
-    float vel_cmd = PID_POS_KP * pos_err
-                  + PID_POS_KI * s_pos_integral
-                  + PID_POS_KD * d_meas;
+    float vel_cmd = s_pid_pos_kp * pos_err          /* live-adjustable gains */
+                  + s_pid_pos_ki * s_pos_integral
+                  + s_pid_pos_kd * d_meas;
 
     /* Clamp velocity command to ±Vmax */
     if (vel_cmd >  SCURVE_VMAX_RADS) vel_cmd =  SCURVE_VMAX_RADS;
@@ -396,4 +754,196 @@ void MotorCtrl_Tick100Hz(void)
     /* Pass to inner loop — volatile write is atomic enough for float on M4  */
     s_vel_sp = vel_cmd;
     s_acc_sp = s_sc.acc;
+
+send_telemetry:
+    /* ── Telemetry at 100 Hz ────────────────────────────────────────────────
+       Format: $T,{ms},{pos_deg×10},{vel_rads×10},{acc_rads2×10},{pwm×10}\r\n
+       Integer-only arithmetic — no float formatting, no malloc.
+       snprintf + ring-buffer write: ~4 µs @ 170 MHz = 0.04 % of 10 ms slot.
+       UartDma_SendTelemetry_T() drops silently if the TX watermark is hit.
+       ─────────────────────────────────────────────────────────────────────── */
+    {
+        int16_t pos_x10 = (int16_t)lroundf(s_kalman.x[0] * (180.0f / M_PI) * 10.0f);
+        int16_t vel_x10 = (int16_t)lroundf(s_kalman.x[1] * 10.0f);
+        int16_t acc_x10 = (int16_t)lroundf(s_kalman.x[2] * 10.0f);
+        int16_t co_x10  = (int16_t)(g_robot.motion.motor_pwm * 10);
+        if (!UartDma_SendTelemetry_T(HAL_GetTick(), pos_x10, vel_x10, acc_x10, co_x10)) {
+            g_robot.comms.telemetry_drops++;
+        }
+    }
+}
+
+void MotorCtrl_SetZvdBypass(bool bypass)
+{
+    s_zvd_bypass = bypass;
+}
+
+/* ==========================================================================
+   OPTION 1 — Velocity Bypass API
+   ========================================================================== */
+
+/* MotorCtrl_JogVelocity — call from App_Run every iteration while the L/R
+   joystick key is held.
+
+   Control theory notes:
+   - Bypasses the outer position loop entirely (no ZVD delay, no S-curve lag).
+   - The inner velocity PID tracks vel_rads with its full 1 kHz bandwidth,
+     giving the operator direct, low-latency velocity feel.
+   - Safe to call from the main loop while Tick100Hz is in the ISR: s_jog_active
+     and s_jog_vel_cmd are volatile, and both are simple scalar writes (atomic on
+     Cortex-M4 for float in a single FPU register store).
+   - s_running is set on first entry so the inner loop does not gate off.       */
+void MotorCtrl_JogVelocity(float vel_rads)
+{
+    /* Clamp to Vmax so the operator cannot command beyond the S-curve ceiling */
+    if (vel_rads >  SCURVE_VMAX_RADS) { vel_rads =  SCURVE_VMAX_RADS; }
+    if (vel_rads < -SCURVE_VMAX_RADS) { vel_rads = -SCURVE_VMAX_RADS; }
+
+    if (!s_jog_active) {
+        /* First-entry housekeeping (main-loop context, ISR not yet aware).
+           - Clear position integral NOW so the bypass block in Tick100Hz
+             does not inherit any previously accumulated value.
+           - Do NOT clear s_spd_integral: the inner loop was already tracking
+             velocity correctly; preserving its integral gives a bumpless
+             entry into velocity-only control (no speed transient at engage). */
+        s_pos_integral  = 0.0f;
+        s_pos_prev_meas = s_kalman.x[0]; /* pre-seed derivative, no kick on re-engage */
+        s_running       = true;
+        s_jog_active    = true;           /* last: ISR sees consistent state */
+    }
+    s_jog_vel_cmd = vel_rads;
+}
+
+/* MotorCtrl_JogRelease — call from App_Run when the L/R key is released.
+
+   Bump-less re-engagement of the position loop:
+   1. Zero the velocity command so the inner PID ramps down naturally.
+   2. Clear s_spd_integral — it was tracking the jog velocity setpoint (e.g.
+      1 rad/s), not zero.  Leaving it would inject a velocity burst on the
+      first position-PID-controlled tick.
+   3. Re-seed the S-curve from the current Kalman state.  Crucially, s_sc.vel
+      is set to the estimated actual velocity rather than 0.  This gives the
+      S-curve realistic initial conditions so it naturally decelerates the
+      coasting motor to the locked target — no step change in the trajectory.
+   4. Flush the ZVD buffer to the lock-on position.  Stale taps from the last
+      jog move would otherwise create a one-cycle position transient.
+   5. s_pos_integral is already 0 (zeroed each outer tick during jog).
+      s_pos_prev_meas is already current (updated each outer tick during jog).
+      Both derivative and integral terms of the position PID therefore start
+      from a clean, consistent state — pure bump-less handover.               */
+void MotorCtrl_JogRelease(void)
+{
+    if (!s_jog_active) { return; }
+
+    /* Step 1 & 2 — velocity teardown */
+    s_jog_vel_cmd  = 0.0f;
+    s_vel_sp       = 0.0f;
+    s_acc_sp       = 0.0f;
+    s_spd_integral = 0.0f;   /* was tracking jog vel, not zero — must clear */
+    s_spd_prev_err = 0.0f;
+
+    /* Step 3 — re-seed S-curve with real plant state (bump-less trajectory) */
+    {
+        float pos    = s_kalman.x[0];
+        float vel    = s_kalman.x[1]; /* inherit actual velocity — no step change */
+        s_sc.pos     = pos;
+        s_sc.vel     = vel;
+        s_sc.acc     = 0.0f;
+        s_sc.target  = pos;   /* lock: decelerate to current position */
+        s_sc.done    = false; /* S-curve must generate the decel profile */
+        s_settle_ticks = 0u;
+    }
+
+    /* Step 4 — flush ZVD buffer so all delayed taps agree on the lock position */
+    {
+        float pos = s_kalman.x[0];
+        uint8_t i;
+        for (i = 0u; i < ZVD_BUF_SIZE; i++) { s_zvd_buf[i] = pos; }
+    }
+
+    /* Step 5 — position PID state already clean (maintained during jog) */
+
+    /* Last: clear jog flag so Tick100Hz re-engages position loop next tick */
+    s_jog_active = false;
+}
+
+bool MotorCtrl_IsJogActive(void)
+{
+    return s_jog_active;
+}
+
+/* ==========================================================================
+   OPTION 2 — Aggressive Step-Mode API
+   ========================================================================== */
+
+/* MotorCtrl_JogStepEngage — call once when the first L/R key press is detected.
+
+   The root cause of ZVD clashing with rapid discrete steps is that the ZVD
+   buffer holds 8 delayed position taps (80 ms of history at 100 Hz).  When
+   a new step arrives before the previous taps drain, the superposition of old
+   and new weighted positions creates destructive interference.
+
+   Two simultaneous fixes:
+   a) s_zvd_bypass = true  — the shaper outputs s_sc.pos directly.  No delayed
+      taps means no interference.  Vibration suppression is sacrificed during
+      jogging, which is acceptable: the operator is watching the arm, short
+      steps have low momentum, and ZVD latency (80 ms) makes the arm feel sluggish.
+   b) Raise Amax / Jmax so each discrete step completes well within one App_Run
+      interval.  Even if step N is slightly delayed, step N+1 SetTarget() call
+      arrives after the S-curve has reached .done = true, so there is no
+      mid-trajectory conflict.                                                  */
+void MotorCtrl_JogStepEngage(void)
+{
+    /* Flush the ZVD buffer to current position — prevents stale taps from
+       the last normal move from corrupting the first jog step.               */
+    {
+        float pos = s_kalman.x[0];
+        uint8_t i;
+        for (i = 0u; i < ZVD_BUF_SIZE; i++) { s_zvd_buf[i] = pos; }
+    }
+
+    s_zvd_bypass = true;                /* shaper pass-through                */
+    s_sc_amax    = JOG_STEP_AMAX_RADS2;/* override runtime S-curve limits     */
+    s_sc_jmax    = JOG_STEP_JMAX_RADS3;
+
+    /* Re-seed S-curve from current state before the first SetTarget() call.
+       Without this, the S-curve planner may have stale position from the last
+       normal move, causing an erroneous initial deceleration profile.         */
+    {
+        float pos    = s_kalman.x[0];
+        s_sc.pos     = pos;
+        s_sc.vel     = 0.0f;
+        s_sc.acc     = 0.0f;
+        s_sc.target  = pos;
+        s_sc.done    = true;
+    }
+}
+
+/* MotorCtrl_JogStepDisengage — call when the L/R key is released.
+
+   Integral note: aggressive Amax/Jmax causes the motor to reach the step
+   target quickly with minimal position error at the end.  However, any small
+   residual error after each rapid step is integrated by s_pos_integral.  Over
+   many steps the integral can accumulate a bias.  Clearing it on disengage
+   ensures the first post-jog position command starts from a clean baseline.   */
+void MotorCtrl_JogStepDisengage(void)
+{
+    /* Restore default S-curve limits (hardware-identified) */
+    s_sc_amax = SCURVE_AMAX_RADS2;
+    s_sc_jmax = SCURVE_JMAX_RADS3;
+
+    /* Re-enable ZVD.  Flush buffer to current position so the first shaped
+       output after re-engagement is exactly the current position — the ZVD
+       delay then ramps in naturally over the next 80 ms (T3_STEPS ticks)
+       rather than injecting the position history of the last jog step.       */
+    {
+        float pos = s_kalman.x[0];
+        uint8_t i;
+        for (i = 0u; i < ZVD_BUF_SIZE; i++) { s_zvd_buf[i] = pos; }
+    }
+    s_zvd_bypass = false;
+
+    /* Clear integrals accumulated during aggressive stepping */
+    s_pos_integral = 0.0f;
+    s_spd_integral = 0.0f;
 }

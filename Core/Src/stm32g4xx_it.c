@@ -339,6 +339,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance != TIM6) return;
 
+    IWDG->KR = 0xAAAAu;  /* kick watchdog — if this ISR hangs, reset fires in 50 ms */
     MotorCtrl_Tick1kHz();
 
     static uint16_t s_outer_div = 0;

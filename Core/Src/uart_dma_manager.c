@@ -2,6 +2,7 @@
 #include "main.h"
 #include "params.h"
 #include <string.h>
+#include <stdio.h>
 
 extern UART_HandleTypeDef hlpuart1;
 extern UART_HandleTypeDef huart3;
@@ -157,6 +158,28 @@ bool UartDma_SendTelemetry(const char *str)
 
     tx_kick();
     return true;
+}
+
+bool UartDma_SendTelemetry_T(uint32_t ts_ms,
+                              int16_t pos_x10,
+                              int16_t vel_x10,
+                              int16_t acc_x10,
+                              int16_t co_x10)
+{
+    /* Static buffer: written only from Tick100Hz (single TIM6 ISR context),
+       so no re-entrancy risk.  Max observed length for this format: ~40 chars.
+       O(1): snprintf with 5 integer args + fixed string ≈ 4 µs @ 170 MHz.   */
+    static char buf[64];
+
+    int n = snprintf(buf, sizeof(buf), "$T,%lu,%d,%d,%d,%d\r\n",
+                     (unsigned long)ts_ms,
+                     (int)pos_x10,
+                     (int)vel_x10,
+                     (int)acc_x10,
+                     (int)co_x10);
+
+    if (n <= 0 || n >= (int)sizeof(buf)) return false;
+    return UartDma_SendTelemetry(buf);
 }
 
 bool UartDma_SendJoystick(const uint8_t *data, uint16_t len)
