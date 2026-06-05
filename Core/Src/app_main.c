@@ -336,9 +336,9 @@ static void homing_run(void)
         if (now - s_settle_t < HOMING_SETTLE_MS) break;
 
         {
-            /* Base offset: hardware-calibrated encoder counts (sensor center → physical 0°).
-               Fine-tune: reg 0x32 in whole degrees (user-adjustable, default 0).        */
-            float base_rad  = -(float)HOME_OFFSET_COUNTS * (2.0f * 3.14159265f / (float)ENCODER_CPR);
+            /* Base offset in degrees (sensor center → working 0°).
+               Fine-tune: reg 0x32 in whole degrees (user-adjustable, default 0).  */
+            float base_rad  = deg_to_rad(-HOME_OFFSET_DEG);
             int16_t adj_deg = (int16_t)ModbusBridge_GetReg(MODBUS_REG_HOME_OFFSET);
             s_home_offset_rad = base_rad + deg_to_rad((float)adj_deg);
             hom_dbg("ZERO", rad_to_deg((s_edge_a + s_edge_b) * 0.5f),

@@ -127,11 +127,14 @@
 #define HOMING_VEL_RADS         0.8f    /* creep velocity for edge search (rad/s) ~46 deg/s   */
 #define HOMING_ACCEL_RADS2      2.0f    /* velocity ramp rate during homing (rad/s²)          */
 #define HOMING_WIGGLE_STEP_DEG  30.0f   /* amplitude increment per wiggle step (degrees)      */
-/* Hardware-calibrated offset: proximity sensor center → true physical 0°.
-   Measured with arm at physical home and reading s_pos_counts in Live Expressions.
-   home_offset = -HOME_OFFSET_COUNTS so that 0° = physical home after zeroing.
-   Adjust reg 0x32 (fine-tune deg, int16) for small per-session corrections.  */
-#define HOME_OFFSET_COUNTS      (-71)   /* encoder counts from sensor center to physical home  */
+/* Hardware-calibrated offset: proximity sensor center → working 0°.
+   = position reading (in degrees) when arm is at physical home, taken from
+     s_pos_counts × (360.0 / 8192.0) in Live Expressions after homing.
+   Negative  = physical home is in the −encoder direction from sensor center.
+   To shift working 0° further by N°, subtract N from this value.
+   Example: measured −3.12°, want extra +10° working offset → set −13.12°.
+   Adjust reg 0x32 (int16 degrees) for small per-session fine-tuning.          */
+#define HOME_OFFSET_DEG         (-3.12f)   /* degrees from sensor center to physical home */
 #define HOMING_WIGGLE_MAX_DEG   180.0f  /* max search range from start before FAULT            */
 #define HOMING_OVERSHOOT_DEG         5.0f   /* min deg past edge A before even checking for clear  */
 #define HOMING_OVERSHOOT_MAX_DEG    45.0f   /* abort if sensor never clears within this travel     */
