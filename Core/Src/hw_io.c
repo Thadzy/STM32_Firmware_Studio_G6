@@ -76,6 +76,31 @@ void HwIo_Init(void)
     float raw_avg = (float)(sum / 64u);
     s_v_zero = (raw_avg * (CS_VREF / CS_ADC_COUNTS)) / CS_DIV_RATIO;
 
+    /* Proximity sensor: open-collector optocoupler output.
+       No object  → transistor ON  → sinks pin to GND → LOW  (inactive)
+       Object det → transistor OFF → pin floats        → HIGH via PULLUP (active)
+       PULLUP lifts the floating state to 3.3 V so the two conditions are
+       electrically distinct.  PULLDOWN made both states 0 V — MCU was blind.
+       Read logic in Poll100Hz: GPIO_PIN_SET (HIGH) = sensor triggered.        */
+    {
+        GPIO_InitTypeDef g = {0};
+        g.Pin   = Proximity_Sensor_Pin;
+        g.Mode  = GPIO_MODE_INPUT;
+        g.Pull  = GPIO_PULLUP;
+        g.Speed = GPIO_SPEED_FREQ_LOW;
+        HAL_GPIO_Init(Proximity_Sensor_GPIO_Port, &g);
+    }
+
+    /* Reed_Up: NO switch to VCC.  PULLDOWN holds pin LOW when open. */
+    {
+        GPIO_InitTypeDef g = {0};
+        g.Pin   = Reed_Up_Pin;
+        g.Mode  = GPIO_MODE_INPUT;
+        g.Pull  = GPIO_PULLDOWN;
+        g.Speed = GPIO_SPEED_FREQ_LOW;
+        HAL_GPIO_Init(Reed_Up_GPIO_Port, &g);
+    }
+
     /* PWM: start with 0 % duty so TIM1 CC1 is ready to accept writes */
     HAL_TIM_PWM_Start(&htim1, TIM_CHANNEL_1);
     __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0u);
@@ -99,8 +124,8 @@ void HwIo_Poll100Hz(void)
         s_estop_active = false;
     }
 
-    /* Reed switches: NO_PULL — external resistors set the bias.
-       Treating closed reed = GPIO_PIN_SET (active HIGH). */
+    /* Reed switches: NO switch to VCC, PULLDOWN — active HIGH.
+       2-tick (20 ms) debounce is appropriate for mechanical contacts.   */
     debounce_update(&s_reed[REED_UP],
         HAL_GPIO_ReadPin(Reed_Up_GPIO_Port,    Reed_Up_Pin)    == GPIO_PIN_SET);
     debounce_update(&s_reed[REED_DOWN],
@@ -110,9 +135,22 @@ void HwIo_Poll100Hz(void)
     debounce_update(&s_reed[REED_CLOSE],
         HAL_GPIO_ReadPin(Reed_Close_GPIO_Port, Reed_Close_Pin) == GPIO_PIN_SET);
 
-    /* Proximity sensor: active HIGH (PNP output on PB9) */
-    debounce_update(&s_proximity,
-        HAL_GPIO_ReadPin(Proximity_Sensor_GPIO_Port, Proximity_Sensor_Pin) == GPIO_PIN_SET);
+    /* Proximity sensor: open-collector optocoupler, PULLUP, active HIGH.
+       No object  → transistor ON  → pin LOW  → GPIO_PIN_RESET → state = false
+       Object det → transistor OFF → pin HIGH (via PULLUP) → GPIO_PIN_SET → state = true
+       1-tick (10 ms) debounce: at HOMING_VEL_RADS = 0.4 rad/s the arm
+       travels ~4° per tick.  2 ticks would need an 8°-wide detection zone;
+       1 tick accepts the first stable HIGH sample and still rejects spikes. */
+    {
+        bool prox_raw = (HAL_GPIO_ReadPin(Proximity_Sensor_GPIO_Port,
+                                          Proximity_Sensor_Pin) == GPIO_PIN_SET);
+        if (prox_raw == s_proximity.state) {
+            s_proximity.count = 0u;
+        } else if (++s_proximity.count >= 1u) {   /* 1-tick threshold */
+            s_proximity.state = prox_raw;
+            s_proximity.count = 0u;
+        }
+    }
 
     /* Rising-edge latch — set here at 100 Hz so App_Run never misses an edge */
     if (s_proximity.state && !s_prox_prev_isr) s_prox_latch = true;

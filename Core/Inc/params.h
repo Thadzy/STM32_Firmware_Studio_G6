@@ -116,8 +116,14 @@
 
 /* --- Homing ----------------------------------------------------------------*/
 #define HOMING_SPEED_PWM        6       /* legacy PWM reference — not used by controller      */
-#define HOMING_VEL_RADS         0.8f    /* creep velocity for edge search (rad/s) ~46 deg/s   */
-#define HOMING_ACCEL_RADS2      2.0f    /* velocity ramp rate during homing (rad/s²)          */
+/* Reduced from 0.8 → 0.4 rad/s (~23 deg/s).
+   At 0.8 rad/s with the 8-tick (80 ms) debounce window, the arm travels
+   ≈3.7° before the edge is confirmed — enough to exit a narrow sensor zone
+   before the latch fires.  At 0.4 rad/s travel during debounce is ≈1.8°,
+   well within any practical proximity sensor detection window.
+   Raise back toward 0.8 once sensor wiring is confirmed and edge is seen. */
+#define HOMING_VEL_RADS         0.4f    /* creep velocity for edge search (rad/s) ~23 deg/s   */
+#define HOMING_ACCEL_RADS2      1.0f    /* velocity ramp rate during homing (rad/s²) — halved  */
 #define HOMING_WIGGLE_STEP_DEG  10.0f   /* amplitude increment per wiggle step (degrees)      */
 #define HOMING_WIGGLE_MAX_DEG   180.0f  /* max search range from start before FAULT            */
 #define HOMING_OVERSHOOT_DEG         5.0f   /* min deg past edge A before even checking for clear  */

@@ -630,9 +630,11 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(E_Stop_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : Reed_Up_Pin */
+  /* NO reed switch wired to VCC: open = floating, closed = HIGH.
+     PULLDOWN ensures open reads LOW (inactive) instead of floating.     */
   GPIO_InitStruct.Pin = Reed_Up_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   HAL_GPIO_Init(Reed_Up_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pins : Relay_SysStatus_Pin Relay_Sysmode_Pin Relay_MotorPower_Pin */
@@ -643,6 +645,12 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
   /*Configure GPIO pin : Proximity_Sensor_Pin */
+  /* Open-collector optocoupler output:
+       No object  → transistor ON  → sinks pin to GND  → LOW  (inactive)
+       Object det → transistor OFF → pin floats         → HIGH via PULLUP (active)
+     PULLUP lifts the floating pin to 3.3 V so the two states are electrically
+     distinct.  With PULLDOWN both states read 0 V and the MCU is blind.
+     Read logic: GPIO_PIN_SET (HIGH) = triggered.                          */
   GPIO_InitStruct.Pin = Proximity_Sensor_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_PULLUP;

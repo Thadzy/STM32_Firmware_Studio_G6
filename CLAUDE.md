@@ -130,6 +130,27 @@ Both wrote to the shared TX ring buffer (`s_tx_head`, `s_msg_wr`, `s_modbus_queu
 
 Auto-scan was selecting com0com virtual ports (COM11/COM12) because they echo pings back. Fixed: `_scan_for_robot` now skips any port whose description contains "com0com" and skips COM11/COM12 explicitly. STM32 is on **COM13** (`STMicroelectronics STLink Virtual COM Port`). If auto-scan fails, run: `python serial_bridge.py COM13`.
 
+### Proximity Sensor — Hardware-Verified GPIO Configuration
+
+Sensor type: **open-collector optocoupler** (NOT a PNP sourcing output).
+
+| Physical state | Opto LED | Output transistor | STM32 pin |
+| --- | --- | --- | --- |
+| No object (normal) | ON | Conducting — sinks pin to GND | LOW |
+| Object detected (triggered) | OFF | Open-circuit — pin floats | HIGH via PULLUP |
+
+**Correct firmware configuration (verified with multimeter):**
+
+- Pull: `GPIO_PULLUP` — lifts the floating (triggered) state to 3.3 V so the two states are electrically distinct. `GPIO_PULLDOWN` makes both states 0 V and the MCU is completely blind to triggers.
+- Active condition: `GPIO_PIN_SET` (HIGH) = sensor triggered (object present).
+- This is applied in **two places** and both must match:
+  - `main.c` — `MX_GPIO_Init()` CubeMX block for `Proximity_Sensor_Pin`
+  - `hw_io.c` — `HwIo_Init()` override block (survives CubeMX regeneration)
+- Read logic in `HwIo_Poll100Hz()`: `== GPIO_PIN_SET` → `true` = triggered. Do **not** invert.
+- Debounce: 1-tick (10 ms) — narrow detection zone requires faster confirmation than the generic 2-tick filter.
+
+**Never change this to PULLDOWN** — that was the bug that caused the arm to overshoot the sensor during homing with no `$HOM,EA1` log.
+
 ### serial_bridge.py — diagnostic logging
 
 Added `DEBUG = True` flag. When set:
