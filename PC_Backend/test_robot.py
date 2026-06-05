@@ -10,6 +10,8 @@ Stop base system before running.
 """
 
 import sys, time, serial, serial.tools.list_ports
+sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+sys.stderr.reconfigure(encoding='utf-8', errors='replace')
 from datetime import datetime
 
 # ── config ────────────────────────────────────────────────────────────────
@@ -17,6 +19,7 @@ PORT    = sys.argv[1] if len(sys.argv) > 1 else None
 BAUD    = 230400
 PARITY  = serial.PARITY_EVEN
 ADDR    = 21
+HB_VAL  = 18537   # "HI" — PC reply to robot's 22881 "YA" heartbeat
 
 FSM_NAMES  = {0:'INIT', 1:'HOMING', 2:'IDLE', 3:'RUNNING', 4:'FAULT'}
 MODE_NAMES = {0:'idle', 1:'jog',    2:'auto', 3:'point',   4:'test'}
@@ -95,7 +98,11 @@ _HOM_LABELS = {
     'ZERO': ('center', 'park'),
 }
 
+_quiet = False   # suppress $T telemetry spam during interactive monitors
+
 def _tel(line: str):
+    if _quiet and line.startswith('$T,'):
+        return
     ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
     if line.startswith('$ST'):
         parts = line.split(',')
@@ -125,6 +132,16 @@ def _tel(line: str):
             except (ValueError, IndexError):
                 pass
     print(f"  [{ts}] {line}")
+
+# ── heartbeat ─────────────────────────────────────────────────────────────
+_hb_last = 0.0
+
+def beat(ser):
+    """Write HI heartbeat if >1 s elapsed. Call inside any polling loop."""
+    global _hb_last
+    if time.time() - _hb_last >= 1.0:
+        write_reg(ser, 0x00, HB_VAL)
+        _hb_last = time.time()
 
 def drain(ser, secs=0.15):
     """Drain + print pending telemetry for 'secs' seconds."""
@@ -165,13 +182,14 @@ def wait_idle(ser, timeout=20.0, label='') -> bool:
     deadline = time.time() + timeout
     last_pos = None
     while time.time() < deadline:
+        beat(ser)
         drain(ser, 0.05)
         task_raw = read_reg(ser, 0x27)
         pos_raw  = read_reg(ser, 0x28)
         emerg    = read_reg(ser, 0x31)
 
-        # fault check via emergency reg upper byte
-        if emerg is not None and (emerg >> 8) != 0:
+        # fault check — ignore 0x20 (PC link lost: cleared by heartbeat above)
+        if emerg is not None and (emerg >> 8) not in (0, 0x20):
             fc = emerg >> 8
             pos = s16(pos_raw) / 10.0
             print(f"  ✗ FAULT code={fc}  pos={pos:.1f}°")
@@ -210,6 +228,7 @@ def test_homing(ser):
     ok = False
 
     while time.time() < deadline:
+        beat(ser)
         raw = ser.readline()
         if not raw:
             continue
@@ -338,6 +357,41 @@ def soft_stop(ser):
     print("  Soft stop sent")
 
 
+def monitor_prox(ser):
+    """Live proximity/reed monitor. Move the arm by hand over the sensor and
+    watch the prox bit. Ctrl+C to stop. Pure FC03 polling, no motion."""
+    global _quiet
+    print("\n══ PROXIMITY LIVE MONITOR ══")
+    print("  Move the arm slowly across the sensor. Watch prox.")
+    print("  Also check the sensor's own indicator LED. Ctrl+C to stop.\n")
+    _quiet = True
+    last = None
+    try:
+        while True:
+            sensors = read_reg(ser, 0x26)
+            pos_raw = read_reg(ser, 0x28)
+            if sensors is None:
+                print("  (no response)")
+                time.sleep(0.2)
+                continue
+            prox  = bool(sensors & 0x08)
+            r_up  = bool(sensors & 0x01)
+            r_dn  = bool(sensors & 0x02)
+            r_cl  = bool(sensors & 0x04)
+            pos   = s16(pos_raw) / 10.0
+            mark = "  <<< PROX!" if prox else ""
+            line = f"prox={int(prox)}  up={int(r_up)} dn={int(r_dn)} cl={int(r_cl)}  pos={pos:.1f}deg{mark}"
+            if line != last:                    # only print on change to reduce noise
+                ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+                print(f"  [{ts}] {line}")
+                last = line
+            time.sleep(0.03)
+    except KeyboardInterrupt:
+        print("\n  Monitor stopped.")
+    finally:
+        _quiet = False
+
+
 # ── port scan ─────────────────────────────────────────────────────────────
 def find_port():
     for p in sorted(serial.tools.list_ports.comports()):
@@ -395,11 +449,15 @@ Commands:
   ag      Auto test — 1 pair, gripper enabled
   s       Soft stop
   r       Read status
+  p       Proximity live monitor (move arm by hand, watch prox bit)
+  oN      Set homing offset to N degrees  (e.g. o3, o-3)  used after next home
+  sh      Set home HERE — zero encoder at current position immediately (pos → 0°)
   q       Quit
 """
         print(MENU)
 
         while True:
+            beat(ser)
             try:
                 cmd = input(">>> ").strip()
             except (EOFError, KeyboardInterrupt):
@@ -407,6 +465,7 @@ Commands:
                 break
 
             if not cmd:
+                beat(ser)
                 continue
             elif cmd == 'q':
                 break
@@ -436,6 +495,20 @@ Commands:
             elif cmd == 'r':
                 print_status(ser)
                 drain(ser, 0.5)
+            elif cmd == 'p':
+                monitor_prox(ser)
+            elif cmd == 'sh':
+                write_reg(ser, 0x01, 8)   # SetHome: zero encoder at current pos
+                time.sleep(0.1)
+                pos_raw = read_reg(ser, 0x28)
+                print(f"  Home set. pos={s16(pos_raw)/10.0:.1f}deg (should be 0.0)")
+            elif cmd.startswith('o') and len(cmd) > 1:
+                try:
+                    offset_deg = int(cmd[1:])
+                    write_reg(ser, 0x32, offset_deg & 0xFFFF)
+                    print(f"  Home offset set to {offset_deg} deg (reg 0x32)")
+                except ValueError:
+                    print("  Bad offset. Use e.g. o3 or o-3")
             else:
                 print(MENU)
 

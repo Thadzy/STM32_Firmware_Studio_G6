@@ -30,8 +30,9 @@
 #define MOTOR_PWM_MAX           50u     /* hardware ceiling = ARR = 100 % duty = 24 V */
 #define MOTOR_SUPPLY_VOLTS      24.0f
 #define MOTOR_SAFE_VOLTS        6.0f
-/* Software duty cap: (6/24) × 50 = 12  — raise gradually once motion is verified */
-#define MOTOR_VOLT_LIMIT_PWM    12u
+/* Software duty cap: motion verified — raised to 50 % duty (12 V).
+   Previous 25 % (6 V) was too low; motor was creeping at ~1 deg/s during homing. */
+#define MOTOR_VOLT_LIMIT_PWM    25u
 
 /* --- Encoder (ATM103, 2048 CPR → TIM3 TI12 quadrature × 4 = 8192 cnt/rev)
    ENCODER_DIRECTION: set +1 if positive PWM → increasing counts.
@@ -123,9 +124,14 @@
    before the latch fires.  At 0.4 rad/s travel during debounce is ≈1.8°,
    well within any practical proximity sensor detection window.
    Raise back toward 0.8 once sensor wiring is confirmed and edge is seen. */
-#define HOMING_VEL_RADS         0.4f    /* creep velocity for edge search (rad/s) ~23 deg/s   */
-#define HOMING_ACCEL_RADS2      1.0f    /* velocity ramp rate during homing (rad/s²) — halved  */
-#define HOMING_WIGGLE_STEP_DEG  10.0f   /* amplitude increment per wiggle step (degrees)      */
+#define HOMING_VEL_RADS         0.8f    /* creep velocity for edge search (rad/s) ~46 deg/s   */
+#define HOMING_ACCEL_RADS2      2.0f    /* velocity ramp rate during homing (rad/s²)          */
+#define HOMING_WIGGLE_STEP_DEG  30.0f   /* amplitude increment per wiggle step (degrees)      */
+/* Hardware-calibrated offset: proximity sensor center → true physical 0°.
+   Measured with arm at physical home and reading s_pos_counts in Live Expressions.
+   home_offset = -HOME_OFFSET_COUNTS so that 0° = physical home after zeroing.
+   Adjust reg 0x32 (fine-tune deg, int16) for small per-session corrections.  */
+#define HOME_OFFSET_COUNTS      (-71)   /* encoder counts from sensor center to physical home  */
 #define HOMING_WIGGLE_MAX_DEG   180.0f  /* max search range from start before FAULT            */
 #define HOMING_OVERSHOOT_DEG         5.0f   /* min deg past edge A before even checking for clear  */
 #define HOMING_OVERSHOOT_MAX_DEG    45.0f   /* abort if sensor never clears within this travel     */

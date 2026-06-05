@@ -336,8 +336,11 @@ static void homing_run(void)
         if (now - s_settle_t < HOMING_SETTLE_MS) break;
 
         {
-            int16_t off_raw   = (int16_t)ModbusBridge_GetReg(MODBUS_REG_HOME_OFFSET);
-            s_home_offset_rad = deg_to_rad((float)off_raw);
+            /* Base offset: hardware-calibrated encoder counts (sensor center → physical 0°).
+               Fine-tune: reg 0x32 in whole degrees (user-adjustable, default 0).        */
+            float base_rad  = -(float)HOME_OFFSET_COUNTS * (2.0f * 3.14159265f / (float)ENCODER_CPR);
+            int16_t adj_deg = (int16_t)ModbusBridge_GetReg(MODBUS_REG_HOME_OFFSET);
+            s_home_offset_rad = base_rad + deg_to_rad((float)adj_deg);
             hom_dbg("ZERO", rad_to_deg((s_edge_a + s_edge_b) * 0.5f),
                     rad_to_deg(s_user_home_rad),
                     rad_to_deg(MotorCtrl_GetPosition_rad()));
@@ -630,7 +633,12 @@ static void fsm_run(void)
             }
         } else if (mode_reg & 0x08u) {                  /* SetHome          */
             ModbusBridge_SetReg(0x01, 0);
-            s_user_home_rad = MotorCtrl_GetPosition_rad();
+            /* Zero the encoder at the current physical position immediately.
+               Arm must be stopped (STATE_IDLE). After this, pos reads 0°
+               and all subsequent moves reference this as home.              */
+            MotorCtrl_Zero(0.0f);
+            MotorCtrl_SetTarget(0.0f);
+            s_user_home_rad = 0.0f;
         } else if (mode_reg & 0x10u) {                  /* Test — reserved  */
             ModbusBridge_SetReg(0x01, 0);
         }
