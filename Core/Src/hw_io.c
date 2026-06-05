@@ -22,8 +22,8 @@ static Debounce_t s_reed[REED_COUNT];
 static Debounce_t s_proximity;
 static Debounce_t s_reset_btn;
 
-/* Mode switch: longer debounce (10 × 10ms = 100ms) to reject relay/button
-   inductive spikes on adjacent GPIO lines.                                  */
+/* Mode switch: long debounce (MODE_SWITCH_DEBOUNCE_TICKS × 10ms) to reject
+   relay/button inductive spikes and motor-PWM EMI on adjacent GPIO lines.   */
 static uint8_t s_mode_count = 0u;
 static bool    s_mode_state = false;
 
@@ -160,12 +160,13 @@ void HwIo_Poll100Hz(void)
     debounce_update(&s_reset_btn,
         HAL_GPIO_ReadPin(Reset_Btn_GPIO_Port, Reset_Btn_Pin) == GPIO_PIN_RESET);
 
-    /* Mode switch: active LOW (PULLUP on PA6), 100ms hold to reject spikes  */
+    /* Mode switch: active LOW (PULLUP on PA6). Maintained switch — a long
+       stable-hold window rejects motor-PWM-switching EMI coupled onto the line. */
     {
         bool raw = (HAL_GPIO_ReadPin(Selected_Mode_GPIO_Port, Selected_Mode_Pin) == GPIO_PIN_RESET);
         if (raw == s_mode_state) {
             s_mode_count = 0u;
-        } else if (++s_mode_count >= 10u) {
+        } else if (++s_mode_count >= MODE_SWITCH_DEBOUNCE_TICKS) {
             s_mode_state = raw;
             s_mode_count = 0u;
         }

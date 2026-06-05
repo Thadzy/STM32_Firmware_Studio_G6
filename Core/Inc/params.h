@@ -13,6 +13,11 @@
    Clears immediately on a single HIGH read (fail-safe). */
 #define ESTOP_DEBOUNCE_THRESHOLD    8u
 
+/* Mode selector (PA6): a maintained switch, not momentary — a long hold is
+   fine and rejects motor-PWM-switching EMI bursts coupled onto the line.
+   25 × 10 ms = 250 ms of stable reading required before the mode flips.      */
+#define MODE_SWITCH_DEBOUNCE_TICKS  25u
+
 /* --- ADC / Current Sensor (WCS1800, ±35 A) ---------------------------------*/
 /* Zero is auto-calibrated at boot (64-sample average while motor is off).
    CS_DIV_RATIO: voltage divider between sensor output and PA0.
@@ -125,6 +130,14 @@
    well within any practical proximity sensor detection window.
    Raise back toward 0.8 once sensor wiring is confirmed and edge is seen. */
 #define HOMING_VEL_RADS         0.8f    /* creep velocity for edge search (rad/s) ~46 deg/s   */
+/* --- Two-stage homing ------------------------------------------------------*/
+#define HOMING_FAST_VEL_RADS    1.0f    /* Stage-1 coarse search (= HOMING_VEL_RADS)          */
+#define HOMING_PREC_VEL_RADS    0.5f    /* Stage-3 precision search (~29 deg/s). Above motor
+                                           dead zone → smooth, no stick-slip crawl. Repeatability
+                                           comes from A/B latency cancelling at EQUAL velocity,
+                                           not from low speed — keep fast enough to move cleanly. */
+#define HOMING_BACKOFF_DEG      5.0f    /* extra travel past prox-OFF to clear the window     */
+#define HOMING_BACKOFF_MAX_DEG  60.0f   /* abort if sensor never clears during backoff        */
 #define HOMING_ACCEL_RADS2      2.0f    /* velocity ramp rate during homing (rad/s²)          */
 #define HOMING_WIGGLE_STEP_DEG  30.0f   /* amplitude increment per wiggle step (degrees)      */
 /* Hardware-calibrated offset: proximity sensor center → working 0°.

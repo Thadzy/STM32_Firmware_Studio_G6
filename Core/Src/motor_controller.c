@@ -326,11 +326,16 @@ float MotorCtrl_GetPosition_rad(void)
     return s_kalman.x[0];
 }
 
-void MotorCtrl_HomingCreep(int8_t dir)
+void MotorCtrl_HomingCreepVel(int8_t dir, float vel_rads)
 {
     s_homing_mode = true;
-    s_homing_vel  = (dir >= 0) ? HOMING_VEL_RADS : -HOMING_VEL_RADS;
+    s_homing_vel  = (dir >= 0) ? vel_rads : -vel_rads;
     s_running     = true;
+}
+
+void MotorCtrl_HomingCreep(int8_t dir)            /* legacy wrapper, unchanged behaviour */
+{
+    MotorCtrl_HomingCreepVel(dir, HOMING_VEL_RADS);
 }
 
 bool MotorCtrl_IsAtPosition(void)

@@ -51,6 +51,27 @@ SLAVE_ADDR   = 21        # 0x15  Modbus slave address of the robot
 DEBUG        = False      # print telemetry + frame logs to console
 LOG_RATE_S   = 2.0       # min seconds between repeated BAD-CRC log lines
 
+_REG_NAMES = {
+    0x00: 'heartbeat',
+    0x01: 'control_mode',
+    0x02: 'target_pos_deg',
+    0x03: 'target_vel_rps',
+    0x04: 'target_acc_rps2',
+    0x10: 'kp_pos',
+    0x11: 'ki_pos',
+    0x12: 'kd_pos',
+    0x13: 'kp_vel',
+    0x14: 'ki_vel',
+    0x15: 'kd_vel',
+    0x20: 'fsm_state',
+    0x21: 'current_pos_counts',
+    0x22: 'current_vel_rps',
+    0x23: 'current_acc_rps2',
+    0x24: 'motor_pwm',
+    0x30: 'sensor_bits',
+    0x31: 'fault_estop',
+}
+
 # ── CRC-16 (Modbus) ────────────────────────────────────────────────────────
 def _crc16(data: bytes) -> int:
     crc = 0xFFFF
@@ -288,12 +309,23 @@ def _com10_reader(ser: serial.Serial) -> None:
             if DEBUG and fc == 0x06:
                 reg = (frame[2] << 8) | frame[3]
                 val = (frame[4] << 8) | frame[5]
-                _REG_NAMES = {0x00:'heartbeat', 0x01:'mode', 0x25:'softstop'}
                 desc = _REG_NAMES.get(reg, f'reg0x{reg:02X}')
                 note = ''
                 if reg == 0x00 and val == 18537: note = '  ← HI (heartbeat reply)'
                 if reg == 0x01 and val == 1:     note = '  ← HOME command'
+                if reg == 0x01:                  note += f'  ← mode={val}'
                 print(f"[tx] FC06 {desc}={val}{note}")
+            elif DEBUG and fc == 0x10:
+                # [addr fc start_hi start_lo count_hi count_lo bc data… crc lo hi]
+                start = (frame[2] << 8) | frame[3]
+                count = (frame[4] << 8) | frame[5]
+                data  = frame[7:7 + count * 2]
+                vals  = [ (data[i] << 8) | data[i + 1] for i in range(0, len(data), 2) ]
+                # show signed too, since slots are int16 (sign = direction)
+                def _s16(v): return v - 0x10000 if v >= 0x8000 else v
+                pairs = ', '.join(
+                    f'0x{start+k:02X}={v}({_s16(v)})' for k, v in enumerate(vals))
+                print(f"[tx] FC16 write {count} regs from 0x{start:02X}: {pairs}")
             _to_robot.put(frame)
 
 

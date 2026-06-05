@@ -21,21 +21,30 @@ extern TIM_HandleTypeDef htim6;
    Homing sub-state machine
    Motion law: ALWAYS HomingCreep (HOMING_VEL_RADS). Never S-curve during home.
 
+   Two-stage industrial homing. Motion law: ALWAYS HomingCreep. Never S-curve.
+
    Sequence:
-     SWEEP      — triangular sweep with growing amplitude until sensor fires (rising edge = A)
-     OVERSHOOT  — continue HOMING_OVERSHOOT_DEG past edge A to guarantee sensor is cleared
-     FIND_EDGE_B — reverse; rising edge from other side = edge B
-     GO_CENTER  — creep to (A + B) / 2; timeout after HOMING_CENTER_TIMEOUT_MS
-     SETTLE     — hold still for HOMING_SETTLE_MS then zero
+     FAST_SEARCH   — growing sweep at FAST vel; coarse sensor find (edge discarded)
+     BACKOFF       — reverse until prox OFF + HOMING_BACKOFF_DEG margin (clean OFF state)
+     PREC_EDGE_A   — slow steady approach into sensor; capture edge A
+     PREC_OVERSHOOT— continue HOMING_OVERSHOOT_DEG past edge A to clear the sensor
+     FIND_EDGE_B   — reverse at precision vel; rising edge from other side = edge B
+     GO_CENTER     — creep to (A + B) / 2; timeout after HOMING_CENTER_TIMEOUT_MS
+     SETTLE        — hold still for HOMING_SETTLE_MS then zero
+
+   Edges A and B are both captured at HOMING_PREC_VEL_RADS, so sensor-latency
+   bias is symmetric and cancels in the (A+B)/2 midpoint → high repeatability.
    ========================================================================= */
 typedef enum {
     HOM_IDLE = 0,
     HOM_INIT,
-    HOM_SWEEP,        /* growing-amplitude sweep until sensor ON = edge A    */
-    HOM_OVERSHOOT,    /* continue past edge A to clear the sensor            */
-    HOM_FIND_EDGE_B,  /* reversed — rising edge from other side = edge B     */
-    HOM_GO_CENTER,    /* creep to (A + B) / 2                                */
-    HOM_SETTLE,       /* wait HOMING_SETTLE_MS then zero                     */
+    HOM_FAST_SEARCH,    /* growing sweep at FAST vel — coarse find, edge NOT used */
+    HOM_BACKOFF,        /* reverse until prox OFF + HOMING_BACKOFF_DEG margin      */
+    HOM_PREC_EDGE_A,    /* slow steady approach — capture edge A                   */
+    HOM_PREC_OVERSHOOT, /* continue past edge A to clear the sensor                */
+    HOM_FIND_EDGE_B,    /* reversed at precision vel — rising edge = edge B        */
+    HOM_GO_CENTER,      /* creep to (A + B) / 2                                    */
+    HOM_SETTLE,         /* wait HOMING_SETTLE_MS then zero                         */
 } HomingState_t;
 
 static HomingState_t s_hom;
@@ -45,6 +54,7 @@ static float    s_sweep_amp_rad;    /* current half-cycle amplitude             
 static float    s_edge_a;           /* rising edge entering sensor from sweep direction       */
 static float    s_edge_b;           /* rising edge entering sensor from opposite direction    */
 static float    s_search_start_rad; /* position when FIND_EDGE_B begins (for safety limit)   */
+static float    s_backoff_start_rad; /* position when prox first cleared during HOM_BACKOFF   */
 static uint32_t s_settle_t;
 static uint32_t s_center_start_ms; /* HAL_GetTick when GO_CENTER begins — for timeout        */
 static float    s_home_offset_rad;
@@ -226,18 +236,17 @@ static void homing_run(void)
         s_edge_b          = 0.0f;
         (void)HwIo_GetProxRisingEdge();   /* flush any stale latch from before homing */
 
-        /* Whether inside or outside the zone, always start the sweep.
-           If inside, the sweep exits first then catches the proper rising
-           edge on re-entry — giving a real edge A, not just parked position. */
-        MotorCtrl_HomingCreep(s_sweep_dir);
-        s_hom = HOM_SWEEP;
+        /* Stage 1: coarse find at FAST velocity. Whether inside or outside
+           the zone, always start the sweep. This edge is discarded — it only
+           locates the sensor window for the precision pass.                */
+        MotorCtrl_HomingCreepVel(s_sweep_dir, HOMING_FAST_VEL_RADS);
+        s_hom = HOM_FAST_SEARCH;
         break;
 
     /* ------------------------------------------------------------------ */
-    case HOM_SWEEP:
-        /* Sinusoidal (triangular) sweep: creep at constant slow speed.
-           Each time the arm travels one amplitude in the current direction,
-           reverse and grow the amplitude — like a growing sine envelope.  */
+    case HOM_FAST_SEARCH:
+        /* Stage 1 — triangular sweep at FAST vel until the sensor is found.
+           Each time the arm travels one amplitude, reverse and grow it.    */
         {
             float traveled = (pos - s_sweep_start_rad) * (float)s_sweep_dir;
 
@@ -253,31 +262,72 @@ static void homing_run(void)
                     MotorCtrl_Stop();
                     break;
                 }
-                MotorCtrl_HomingCreep(s_sweep_dir);
+                MotorCtrl_HomingCreepVel(s_sweep_dir, HOMING_FAST_VEL_RADS);
             }
 
-            /* Rising edge — proximity just turned ON → edge A found       */
+            /* Coarse hit — DO NOT record this edge. Reverse and back off at
+               precision vel until the sensor clears with margin.           */
             if (HwIo_GetProxRisingEdge()) {
-                s_edge_a = pos;
-                hom_dbg("EA1", rad_to_deg(pos), rad_to_deg(s_sweep_amp_rad), rad_to_deg(pos));
-                s_hom = HOM_OVERSHOOT;
+                hom_dbg("FST", rad_to_deg(pos), 0.0f, rad_to_deg(pos));
+                s_sweep_dir         = -s_sweep_dir;
+                s_sweep_start_rad   = pos;   /* backoff-distance safety ref  */
+                s_backoff_start_rad = pos;   /* armed once prox clears       */
+                MotorCtrl_HomingCreepVel(s_sweep_dir, HOMING_PREC_VEL_RADS);
+                (void)HwIo_GetProxRisingEdge();   /* flush latch */
+                s_hom = HOM_BACKOFF;
             }
         }
         break;
 
     /* ------------------------------------------------------------------ */
-    case HOM_OVERSHOOT:
-        /* Continue past edge A until the sensor physically clears (prox OFF).
-           A fixed 5-deg stop is not enough when the sensor window is wider
-           than HOMING_OVERSHOOT_DEG — the motor would reverse while still
-           inside the zone, exit from the wrong side (A), and never find B.  */
+    case HOM_BACKOFF:
+        /* Stage 2 — drive away until prox OFF, then an extra margin so the
+           precision pass always starts from a guaranteed clean OFF state.  */
+        if (HwIo_GetProximity()) {
+            s_backoff_start_rad = pos;        /* still inside — keep arming  */
+            if (fabsf(pos - s_sweep_start_rad) > deg_to_rad(HOMING_BACKOFF_MAX_DEG)) {
+                g_robot.fsm              = STATE_FAULT;
+                g_robot.comms.fault_code = 3u; /* sensor never cleared       */
+                MotorCtrl_Stop();
+            }
+        } else if (fabsf(pos - s_backoff_start_rad) >= deg_to_rad(HOMING_BACKOFF_DEG)) {
+            /* Fully clear + margin — reverse into sensor at PRECISION vel.  */
+            s_sweep_dir        = -s_sweep_dir; /* back toward sensor          */
+            s_search_start_rad = pos;
+            MotorCtrl_HomingCreepVel(s_sweep_dir, HOMING_PREC_VEL_RADS);
+            (void)HwIo_GetProxRisingEdge();    /* flush before edge A         */
+            hom_dbg("BAK", rad_to_deg(pos), 0.0f, rad_to_deg(pos));
+            s_hom = HOM_PREC_EDGE_A;
+        }
+        break;
+
+    /* ------------------------------------------------------------------ */
+    case HOM_PREC_EDGE_A:
+        /* Stage 3a — steady precision velocity → constant, known latency.  */
+        if (HwIo_GetProxRisingEdge()) {
+            s_edge_a = pos;
+            hom_dbg("EA1", rad_to_deg(pos), rad_to_deg(s_sweep_amp_rad), rad_to_deg(pos));
+            s_hom = HOM_PREC_OVERSHOOT;
+        } else if (fabsf(pos - s_search_start_rad) > deg_to_rad(HOMING_MAX_SEARCH_DEG)) {
+            g_robot.fsm              = STATE_FAULT;
+            g_robot.comms.fault_code = 2u;     /* edge A not found            */
+            MotorCtrl_Stop();
+        }
+        break;
+
+    /* ------------------------------------------------------------------ */
+    case HOM_PREC_OVERSHOOT:
+        /* Stage 3b — continue past edge A until the sensor physically clears
+           (prox OFF). A fixed deg stop is not enough when the sensor window
+           is wider than HOMING_OVERSHOOT_DEG — the motor would reverse while
+           still inside the zone, exit from the wrong side, and never find B. */
         {
             float past = (pos - s_edge_a) * (float)s_sweep_dir;
             if (past >= deg_to_rad(HOMING_OVERSHOOT_DEG) && !HwIo_GetProximity()) {
                 /* Sensor cleared — motor is now beyond the far edge of zone  */
                 s_sweep_dir = -s_sweep_dir;
-                MotorCtrl_HomingCreep(s_sweep_dir);
-                (void)HwIo_GetProxRisingEdge();   /* flush latch */
+                MotorCtrl_HomingCreepVel(s_sweep_dir, HOMING_PREC_VEL_RADS);
+                (void)HwIo_GetProxRisingEdge();   /* flush before edge B */
                 s_search_start_rad = pos;
                 hom_dbg("OVS", rad_to_deg(s_edge_a), rad_to_deg(pos), rad_to_deg(pos));
                 s_hom = HOM_FIND_EDGE_B;
@@ -292,7 +342,8 @@ static void homing_run(void)
 
     /* ------------------------------------------------------------------ */
     case HOM_FIND_EDGE_B:
-        /* 100 Hz latch guarantees edge detection even if App_Run is slow  */
+        /* Stage 3c — same precision vel as edge A; latency bias cancels in
+           the (A+B)/2 midpoint. 100 Hz latch guarantees edge capture.      */
         if (HwIo_GetProxRisingEdge()) {
             s_edge_b = pos;
             float center = (s_edge_a + s_edge_b) * 0.5f;
@@ -326,7 +377,7 @@ static void homing_run(void)
             int8_t needed = (err > 0.0f) ? +1 : -1;
             if (needed != s_go_center_dir) {
                 s_go_center_dir = needed;
-                MotorCtrl_HomingCreep(needed);
+                MotorCtrl_HomingCreepVel(needed, HOMING_PREC_VEL_RADS); /* slow, accurate */
             }
         }
         break;
@@ -811,11 +862,15 @@ void App_Run(void)
     g_robot.sensors.reset_btn     = HwIo_GetResetBtn();
     g_robot.sensors.proximity     = HwIo_GetProximity();
 
-    /* Mode switch: ignore during FAULT (emergency can cause GPIO transients).
-       Soft-stop any running motion so new mode takes control from clean state. */
+    /* Mode switch: only act when the arm is idle. Ignore during FAULT (E-stop
+       transients), RUNNING (jog/auto), and HOMING — motor direction reversals
+       inject PWM EMI onto PA6 that can fake a mode flip, clicking the Sysmode
+       relay + pilot lamp mid-motion. Deferring until IDLE means the change
+       takes effect only once motion has fully settled.                        */
     if (g_robot.sensors.selected_mode != s_joy_mode
         && g_robot.fsm != STATE_FAULT
-        && g_robot.fsm != STATE_RUNNING) {
+        && g_robot.fsm != STATE_RUNNING
+        && g_robot.fsm != STATE_HOMING) {
         /* Release any active jog before switching modes so the motor stops
            cleanly and all integrals are reset regardless of which option is active */
         if (s_jog_vel_active)  { MotorCtrl_JogRelease();       s_jog_vel_active  = false; }
@@ -824,12 +879,6 @@ void App_Run(void)
         Relay_SetSysmode(s_joy_mode);
         HwIo_ResetEstopDebounce();  /* discard relay-induced spike on PA5 */
         Joystick_SendAudio(s_joy_mode ? 'J' : 'S');
-        if (g_robot.fsm == STATE_RUNNING) {
-            MotorCtrl_Stop();
-            g_robot.fsm = STATE_IDLE;
-            s_run_mode  = RUN_IDLE;
-            set_task(0x0000);
-        }
     }
 
     /* Heartbeat timeout — soft-stop to IDLE if PC link silent ≥ 2 s */

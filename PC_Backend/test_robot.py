@@ -139,7 +139,7 @@ _hb_last = 0.0
 def beat(ser):
     """Write HI heartbeat if >1 s elapsed. Call inside any polling loop."""
     global _hb_last
-    if time.time() - _hb_last >= 1.0:
+    if time.time() - _hb_last >= 0.5:   # ~2 Hz; firmware times out at 2 s
         write_reg(ser, 0x00, HB_VAL)
         _hb_last = time.time()
 
@@ -298,11 +298,142 @@ def test_auto(ser, pairs=((1, 2),)):
     write_reg(ser, 0x01, 4)   # mode = Auto
     print(f"  >> pairs={n}, mode=4 (Auto) sent\n")
 
+    # Wait for the firmware to actually START the sequence (task 0x27 != 0)
+    # before monitoring. Otherwise wait_idle reads the still-0 task on the very
+    # first poll, declares "Idle" instantly, and returns to the blocking input()
+    # prompt — where beat() stops firing, the 2 s heartbeat lapses, and the
+    # robot soft-stops mid-run with fault_code 0x20 after only the first move.
+    t0 = time.time()
+    started = False
+    while time.time() - t0 < 3.0:
+        beat(ser)
+        drain(ser, 0.05)
+        if read_reg(ser, 0x27):
+            started = True
+            break
+        time.sleep(0.1)
+    if not started:
+        print("  ✗ Auto did not start (task stayed Idle). Is the robot homed and in IDLE?")
+        return False
+
     ok = wait_idle(ser, timeout=60.0 * n)
     if ok:
         print("  ✓ Auto sequence complete")
     else:
         print("  ✗ Auto failed")
+    return ok
+
+
+# ── collision-aware random auto sequencer ──────────────────────────────────
+# Firmware fact (verified in app_main.c resolve_target + motor_controller.c):
+#   In Auto mode the arm moves to the ABSOLUTE angle  index * 5°  (sign of the
+#   slot is ignored) and the S-curve drives there LINEARLY — no wrap-around /
+#   shortest-path. So a pick→place pair always sweeps the holes numerically
+#   BETWEEN pick and place; that arc is fixed and cannot be reversed from the
+#   PC. The only lever we (or the Base System) have over collisions is the
+#   ORDER in which pairs run, because that changes which holes still hold a rod
+#   at the moment of transport. Everything below uses ONLY the documented
+#   registers 0x12–0x21 (slots) + 0x22 (count), so it is reproducible by the
+#   Base System with no firmware change.
+
+def _between(a: int, b: int) -> set:
+    """Hole indices strictly swept when moving from index a to index b."""
+    lo, hi = min(abs(a), abs(b)), max(abs(a), abs(b))
+    return set(range(lo + 1, hi))
+
+def plan_safe_order(pairs, rng, attempts=4000):
+    """Return a random collision-safe ordering of (pick, place) pairs, or None.
+
+    Model: every pick hole starts occupied (a rod is in it). To run a pair we
+    (1) lift the rod at `pick` (that hole becomes empty during transport),
+    (2) sweep pick→place — every hole still occupied on that arc is a collision,
+    (3) the destination `place` must itself be empty, then becomes occupied.
+    Backtracking search with randomized branch order yields a *random* valid order.
+    """
+    n = len(pairs)
+    start_occupied = frozenset(abs(p) for p, _ in pairs)
+
+    def search(remaining, occupied, acc):
+        if not remaining:
+            return acc
+        order = list(remaining)
+        rng.shuffle(order)
+        for i in order:
+            pick, place = abs(pairs[i][0]), abs(pairs[i][1])
+            occ_transport = occupied - {pick}          # rod lifted off pick
+            if place in occ_transport:                 # destination must be free
+                continue
+            if _between(pick, place) & occ_transport:  # arc must be clear
+                continue
+            res = search(remaining - {i},
+                         occ_transport | {place},
+                         acc + [i])
+            if res is not None:
+                return res
+        return None
+
+    # A few independent randomized restarts so the chosen order really varies.
+    for _ in range(max(1, attempts // max(1, n))):
+        res = search(frozenset(range(n)), set(start_occupied), [])
+        if res is not None:
+            return [pairs[i] for i in res]
+    return None
+
+
+def test_auto_random(ser, n_pairs=3, max_hole=10, gripper=False, seed=None):
+    """Generate random pick/place pairs, order them collision-safe, run Auto.
+
+    Uses the same write path as test_auto (regs 0x12–0x21, 0x22) so the
+    behavior is identical to what the Base System produces."""
+    import random
+    rng = random.Random(seed)
+    n_pairs = max(1, min(n_pairs, 8))
+    max_hole = max(2, min(max_hole, 72))
+
+    if max_hole < 2 * n_pairs:
+        print(f"  Need at least {2*n_pairs} holes for {n_pairs} distinct pick+place pairs "
+              f"(max_hole={max_hole}). Reduce pairs or raise max_hole.")
+        return False
+
+    print(f"\n══ AUTO RANDOM ({n_pairs} pair(s), holes 1–{max_hole}, "
+          f"gripper={'on' if gripper else 'off'}) ══")
+
+    # Re-roll random pair sets until one has a collision-safe order. Many dense
+    # random pairings are physically infeasible (a carried rod would always
+    # sweep an occupied hole), so we keep drawing fresh pairs rather than fail.
+    pairs = ordered = None
+    REROLLS = 2000
+    for attempt in range(REROLLS):
+        holes = rng.sample(range(1, max_hole + 1), 2 * n_pairs)  # distinct holes
+        cand = [(holes[2 * i], holes[2 * i + 1]) for i in range(n_pairs)]
+        order = plan_safe_order(cand, rng)
+        if order is not None:
+            pairs, ordered = cand, order
+            if attempt:
+                print(f"  (found a collision-safe set after {attempt+1} re-rolls)")
+            break
+
+    if ordered is None:
+        print(f"  ✗ No collision-safe random set found in {REROLLS} tries for "
+              f"{n_pairs} pairs in holes 1–{max_hole}.")
+        print("    Try fewer pairs or a larger hole range (raise max_hole).")
+        return False
+
+    print("  Generated pairs (pick → place):")
+    for p, q in pairs:
+        print(f"    {p:>2} ({p*5}°) → {q:>2} ({q*5}°)")
+
+    print("\n  Collision-safe run order:")
+    for k, (p, q) in enumerate(ordered, 1):
+        swept = sorted(_between(p, q))
+        swept_s = f"  sweeps {swept}" if swept else "  (adjacent, no holes between)"
+        print(f"    {k}. pick {p:>2} → place {q:>2}{swept_s}")
+
+    if gripper:
+        write_reg(ser, 0x04, 1)
+    ok = test_auto(ser, pairs=ordered)
+    if gripper:
+        write_reg(ser, 0x04, 0)
     return ok
 
 
@@ -447,6 +578,9 @@ Commands:
   gl      Gripper Place sequence (down→open→up)
   a       Auto test — 1 pair, no gripper
   ag      Auto test — 1 pair, gripper enabled
+  ar      Auto RANDOM — random pairs, collision-safe order, no gripper
+  arg     Auto RANDOM — random pairs, collision-safe order, gripper enabled
+  arN     Auto RANDOM with N pairs (e.g. ar4, arg2)
   s       Soft stop
   r       Read status
   p       Proximity live monitor (move arm by hand, watch prox bit)
@@ -484,6 +618,18 @@ Commands:
                 test_grip(ser, pick=True)
             elif cmd == 'gl':
                 test_grip(ser, pick=False)
+            elif cmd.startswith('arg'):
+                try:
+                    n = int(cmd[3:]) if len(cmd) > 3 else 3
+                    test_auto_random(ser, n_pairs=n, gripper=True)
+                except ValueError:
+                    print("  Bad count. Use e.g. arg or arg4")
+            elif cmd.startswith('ar'):
+                try:
+                    n = int(cmd[2:]) if len(cmd) > 2 else 3
+                    test_auto_random(ser, n_pairs=n, gripper=False)
+                except ValueError:
+                    print("  Bad count. Use e.g. ar or ar4")
             elif cmd == 'a':
                 test_auto(ser, pairs=[(1, 2)])
             elif cmd == 'ag':

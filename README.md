@@ -225,16 +225,23 @@ Pick_and_Place_Robot/
 
 ### Homing sequence (`app_main.c` — `homing_run()`)
 
+Two-stage industrial homing: a fast coarse pass finds the sensor, then a slow
+precision pass captures both edges at one identical velocity so sensor-latency
+bias cancels in the (A + B) / 2 midpoint.
+
 ```
-HOM_INIT → HOM_SWEEP → HOM_OVERSHOOT → HOM_FIND_EDGE_B → HOM_GO_CENTER → HOM_SETTLE
+HOM_INIT → HOM_FAST_SEARCH → HOM_BACKOFF → HOM_PREC_EDGE_A
+        → HOM_PREC_OVERSHOOT → HOM_FIND_EDGE_B → HOM_GO_CENTER → HOM_SETTLE
 ```
 
 | Stage | What happens |
 |-------|-------------|
-| INIT | Flush proximity latch; begin creeping in +1 direction |
-| SWEEP | Growing triangular sweep until proximity rising edge = Edge A |
-| OVERSHOOT | Continue past Edge A until sensor physically clears (avoids false Edge B) |
-| FIND_EDGE_B | Reverse; next rising edge from opposite side = Edge B |
+| INIT | Flush proximity latch; begin FAST creep in +1 direction |
+| FAST_SEARCH | Growing triangular sweep at `HOMING_FAST_VEL_RADS` until sensor found (edge discarded — coarse find only) |
+| BACKOFF | Reverse at precision vel until prox OFF + `HOMING_BACKOFF_DEG` margin (clean OFF start) |
+| PREC_EDGE_A | Slow steady approach at `HOMING_PREC_VEL_RADS`; rising edge = Edge A |
+| PREC_OVERSHOOT | Continue past Edge A until sensor physically clears (avoids false Edge B) |
+| FIND_EDGE_B | Reverse at precision vel; next rising edge from opposite side = Edge B |
 | GO_CENTER | Creep to (A + B) / 2; timeout after 30 s |
 | SETTLE | Hold 1 s; call `MotorCtrl_Zero()` to define home; move to park position |
 
