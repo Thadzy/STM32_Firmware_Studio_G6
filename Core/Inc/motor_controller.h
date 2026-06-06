@@ -31,6 +31,9 @@ bool  MotorCtrl_IsAtPosition(void);           /* position within deadband, no ve
    Resets the corresponding integrator to avoid bump.
    Uses a __disable_irq() critical section — call from main-loop only.       */
 void  MotorCtrl_SetPidGains(uint8_t loop, float kp, float ki, float kd);
+float MotorCtrl_GetKp(uint8_t loop);
+float MotorCtrl_GetKi(uint8_t loop);
+float MotorCtrl_GetKd(uint8_t loop);
 
 /* ---- Joystick jog helpers --------------------------------------------------
    Two mutually exclusive options — use one set or the other, never both.

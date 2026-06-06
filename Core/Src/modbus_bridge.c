@@ -6,6 +6,7 @@
 #include "params.h"
 #include "main.h"
 #include <string.h>
+#include <stdio.h>
 #include <math.h>
 
 /* -------------------------------------------------------------------------
@@ -32,6 +33,7 @@ static bool     s_hb_pending;          /* YA sent, waiting for HI reply      */
 
 /* Auto-tune shared parameter block — extern declared in modbus_bridge.h    */
 AutoTune_Params_t g_at = { 0 };
+static void send_gains_telemetry(uint8_t loop);
 
 /* -------------------------------------------------------------------------
    CRC-16/Modbus
@@ -136,6 +138,11 @@ static void apply_reg_write(uint8_t addr, uint16_t val)
 
     case REG_AT_LOOP:
         g_at.loop_target = (uint8_t)(val & 0x01u);
+        /* Load the active gains for the newly selected loop into the registers */
+        s_regs[REG_AT_NEW_KP] = (uint16_t)(MotorCtrl_GetKp(g_at.loop_target) * 1000.0f);
+        s_regs[REG_AT_NEW_KI] = (uint16_t)(MotorCtrl_GetKi(g_at.loop_target) * 1000.0f);
+        s_regs[REG_AT_NEW_KD] = (uint16_t)(MotorCtrl_GetKd(g_at.loop_target) * 1000.0f);
+        send_gains_telemetry(g_at.loop_target);
         break;
 
     case REG_AT_HYSTERESIS:
@@ -228,6 +235,17 @@ static void on_rx(const uint8_t *data, uint16_t len)
     g_robot.comms.last_rx_len = len;
 }
 
+static void send_gains_telemetry(uint8_t loop)
+{
+    char buf[64];
+    snprintf(buf, sizeof(buf), "$GAINS,%u,%ld,%ld,%ld\r\n",
+             loop,
+             (long)lroundf(MotorCtrl_GetKp(loop) * 1000.0f),
+             (long)lroundf(MotorCtrl_GetKi(loop) * 1000.0f),
+             (long)lroundf(MotorCtrl_GetKd(loop) * 1000.0f));
+    UartDma_SendTelemetry(buf);
+}
+
 /* -------------------------------------------------------------------------
    Public API
    ------------------------------------------------------------------------- */
@@ -236,7 +254,17 @@ void ModbusBridge_Init(void)
     memset(s_regs, 0, sizeof(s_regs));
     s_hb_tick    = 0;
     s_hb_pending = false;
+
+    /* Pre-load current active loop gains (0 = Velocity loop by default) */
+    s_regs[REG_AT_LOOP]   = 0;
+    s_regs[REG_AT_NEW_KP] = (uint16_t)(MotorCtrl_GetKp(0) * 1000.0f);
+    s_regs[REG_AT_NEW_KI] = (uint16_t)(MotorCtrl_GetKi(0) * 1000.0f);
+    s_regs[REG_AT_NEW_KD] = (uint16_t)(MotorCtrl_GetKd(0) * 1000.0f);
+
     UartDma_SetLpuartRxCb(on_rx);
+
+    /* Broadcast initial gains to Web Dashboard */
+    send_gains_telemetry(0);
 }
 
 uint16_t ModbusBridge_GetReg(uint8_t addr)
@@ -253,9 +281,9 @@ void ModbusBridge_Tick(void)
 {
     /* --- Heartbeat: send YA every 200 ms --------------------------------- */
     uint32_t now = HAL_GetTick();
-    if (!s_hb_pending && (now - s_hb_tick >= HB_PERIOD_MS)) {
+    if (now - s_hb_tick >= HB_PERIOD_MS) {
         s_hb_tick    = now;
-        s_hb_pending = true;
+        s_hb_pending = false;  /* Self-healing: clear the pending latch so pings are retried if replies get dropped */
         s_regs[0x00] = HB_YA;
         g_robot.comms.heartbeat = HB_YA;
     }
@@ -297,5 +325,6 @@ void ModbusBridge_Tick(void)
         MotorCtrl_SetPidGains(g_at.loop_target, g_at.new_kp, g_at.new_ki, g_at.new_kd);
         g_at.cmd       = AT_CMD_IDLE;
         s_regs[REG_AT_CMD] = AT_CMD_IDLE;
+        send_gains_telemetry(g_at.loop_target);
     }
 }

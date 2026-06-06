@@ -128,13 +128,6 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  // อ่านค่าดิบจากขา PB4 และ PB5 โดยตรง
-	  GPIO_PinState chA = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_4);
-	  GPIO_PinState chB = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_5);
-
-	  // ปริ้นต์ออกหน้าจอ Serial
-	  HAL_Delay(100); // หน่วงเวลาให้อ่านทัน
-
     App_Run();
   }
   /* USER CODE END 3 */

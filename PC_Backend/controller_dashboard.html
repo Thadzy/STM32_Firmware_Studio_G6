@@ -1,0 +1,1029 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pick & Place Robot - Live Tuning Dashboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uplot@1.6.27/dist/uPlot.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/uplot@1.6.27/dist/uPlot.iife.min.js"></script>
+    <style>
+        :root {
+            --bg-dark: #0b0f19;
+            --bg-card: rgba(17, 24, 39, 0.7);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --text-primary: #f3f4f6;
+            --text-secondary: #9ca3af;
+            
+            --accent-cyan: #06b6d4;
+            --accent-cyan-glow: rgba(6, 182, 212, 0.2);
+            --accent-emerald: #10b981;
+            --accent-pink: #ec4899;
+            --accent-purple: #8b5cf6;
+            --accent-yellow: #f59e0b;
+            --accent-red: #ef4444;
+            --accent-orange: #f97316;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(139, 92, 246, 0.05) 0px, transparent 50%),
+                radial-gradient(at 50% 0%, rgba(6, 182, 212, 0.05) 0px, transparent 50%),
+                radial-gradient(at 100% 100%, rgba(236, 72, 153, 0.03) 0px, transparent 50%);
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.25rem 2rem;
+            border-bottom: 1px solid var(--border-color);
+            background: rgba(11, 15, 25, 0.8);
+            backdrop-filter: blur(12px);
+            z-index: 10;
+        }
+
+        header h1 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            letter-spacing: -0.025em;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        header h1 span {
+            color: var(--accent-cyan);
+            text-shadow: 0 0 10px var(--accent-cyan-glow);
+        }
+
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.875rem;
+            font-weight: 500;
+            background: rgba(255, 255, 255, 0.03);
+            padding: 0.375rem 0.75rem;
+            border-radius: 9999px;
+            border: 1px solid var(--border-color);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: var(--accent-red);
+            box-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
+        }
+
+        .status-dot.connected {
+            background-color: var(--accent-emerald);
+            box-shadow: 0 0 8px rgba(16, 185, 129, 0.5);
+        }
+
+        main {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 340px 1fr;
+            gap: 1.5rem;
+            padding: 1.5rem 2rem;
+            max-width: 1800px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        .glass-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            backdrop-filter: blur(12px);
+            padding: 1.25rem;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+            transition: border-color 0.2s ease;
+        }
+
+        .glass-card:hover {
+            border-color: rgba(255, 255, 255, 0.12);
+        }
+
+        .left-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .section-title {
+            font-size: 0.875rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-secondary);
+            margin-bottom: 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        /* Stats grid */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.75rem;
+        }
+
+        .stat-box {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 0.75rem;
+            text-align: center;
+        }
+
+        .stat-label {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            margin-bottom: 0.25rem;
+        }
+
+        .stat-value {
+            font-size: 1.125rem;
+            font-weight: 700;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .stat-box.full-width {
+            grid-column: span 2;
+        }
+
+        /* Badge Styles */
+        .badge {
+            display: inline-block;
+            font-size: 0.75rem;
+            font-weight: 700;
+            padding: 0.125rem 0.5rem;
+            border-radius: 4px;
+            text-transform: uppercase;
+        }
+        .badge-init { background: rgba(139, 92, 246, 0.15); color: var(--accent-purple); }
+        .badge-homing { background: rgba(245, 158, 11, 0.15); color: var(--accent-yellow); }
+        .badge-idle { background: rgba(156, 163, 175, 0.15); color: var(--text-secondary); }
+        .badge-running { background: rgba(6, 182, 212, 0.15); color: var(--accent-cyan); }
+        .badge-fault { background: rgba(239, 68, 68, 0.15); color: var(--accent-red); animation: blink 1s infinite alternate; }
+
+        @keyframes blink {
+            0% { opacity: 0.6; }
+            100% { opacity: 1; }
+        }
+
+        /* Control inputs */
+        .control-group {
+            margin-bottom: 1rem;
+        }
+
+        .control-group label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.8125rem;
+            font-weight: 500;
+            margin-bottom: 0.375rem;
+        }
+
+        .control-group label span.unit-val {
+            font-variant-numeric: tabular-nums;
+            color: var(--accent-cyan);
+            font-weight: 600;
+        }
+
+        .select-input {
+            width: 100%;
+            background: #181f30;
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 0.5rem;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            outline: none;
+            cursor: pointer;
+        }
+
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .slider-input {
+            flex: 1;
+            -webkit-appearance: none;
+            appearance: none;
+            height: 6px;
+            border-radius: 9999px;
+            background: #1e293b;
+            outline: none;
+        }
+
+        .slider-input::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--accent-cyan);
+            cursor: pointer;
+            box-shadow: 0 0 8px var(--accent-cyan-glow);
+            transition: transform 0.1s ease;
+        }
+
+        .slider-input::-webkit-slider-thumb:hover {
+            transform: scale(1.25);
+        }
+
+        .number-input {
+            width: 70px;
+            background: #181f30;
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 0.375rem;
+            border-radius: 6px;
+            font-size: 0.8125rem;
+            text-align: center;
+            font-variant-numeric: tabular-nums;
+            outline: none;
+        }
+
+        .btn {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 100%;
+            padding: 0.625rem;
+            background: var(--accent-cyan);
+            color: #0b0f19;
+            font-weight: 600;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 4px 12px var(--accent-cyan-glow);
+        }
+
+        .btn:hover {
+            background: #22d3ee;
+            transform: translateY(-1px);
+            box-shadow: 0 6px 16px rgba(6, 182, 212, 0.4);
+        }
+
+        .btn:active {
+            transform: translateY(0);
+        }
+
+        .btn-secondary {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            box-shadow: none;
+        }
+
+        .btn-secondary:hover {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text-primary);
+            box-shadow: none;
+            transform: none;
+        }
+
+        .btn-stop {
+            background: var(--accent-red);
+            color: #fff;
+            box-shadow: 0 4px 12px rgba(239, 68, 68, 0.3);
+        }
+
+        .btn-stop:hover {
+            background: #f87171;
+            box-shadow: 0 6px 16px rgba(239, 68, 68, 0.5);
+        }
+
+        .button-row {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+        }
+
+        /* Jog Card */
+        .jog-grid {
+            display: grid;
+            grid-template-columns: 1fr auto 1fr;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        /* Right charting area */
+        .charts-container {
+            display: grid;
+            grid-template-rows: repeat(3, minmax(200px, 1fr));
+            gap: 1rem;
+            height: calc(100vh - 100px);
+        }
+
+        .chart-card {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+
+        .chart-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+
+        .chart-title {
+            font-size: 0.8125rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .chart-legend {
+            display: flex;
+            gap: 0.75rem;
+            font-size: 0.75rem;
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+
+        .legend-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .chart-wrapper {
+            flex: 1;
+            position: relative;
+            min-height: 0; /* Important for Chart.js inside flex-grow */
+        }
+
+        /* Utility classes */
+        .mb-2 { margin-bottom: 0.5rem; }
+        .mt-auto { margin-top: auto; }
+        .text-red { color: var(--accent-red); }
+        .text-emerald { color: var(--accent-emerald); }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1><span>Pick & Place Robot</span> // Live Tuning</h1>
+        <div style="display: flex; gap: 1rem; align-items: center;">
+            <button class="btn btn-secondary" id="pause-btn" style="width: auto; padding: 0.375rem 1rem;">Pause Graph</button>
+            <div class="connection-status">
+                <div class="status-dot" id="status-dot"></div>
+                <span id="status-text">Disconnected</span>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <div class="left-panel">
+            <!-- Stats -->
+            <div class="glass-card">
+                <div class="section-title">Robot Status</div>
+                <div class="stats-grid">
+                    <div class="stat-box full-width" style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 1rem;">
+                        <span style="font-size: 0.75rem; color: var(--text-secondary);">FSM STATE</span>
+                        <span class="badge badge-idle" id="fsm-badge">UNKNOWN</span>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-label">POSITION</div>
+                        <div class="stat-value" id="stat-pos">0.0°</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-label">VELOCITY</div>
+                        <div class="stat-value" id="stat-vel">0.0°/s</div>
+                    </div>
+                    <div class="stat-box full-width" style="padding: 0.5rem; font-size: 0.75rem; color: var(--text-secondary);" id="stat-fault-box">
+                        Fault: <span id="stat-fault-desc" class="text-emerald">None</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tuning Pane -->
+            <div class="glass-card">
+                <div class="section-title">Interactive PID Tuning</div>
+                
+                <div class="control-group">
+                    <label>Target Loop</label>
+                    <select class="select-input" id="loop-select">
+                        <option value="0">Velocity Loop (Inner, 1 kHz)</option>
+                        <option value="1">Position Loop (Outer, 100 Hz)</option>
+                    </select>
+                </div>
+
+                <div class="control-group">
+                    <label>Proportional Gain (Kp) <span class="unit-val" id="kp-val">0.000</span></label>
+                    <div class="slider-container">
+                        <input type="range" class="slider-input" id="kp-slider" min="0" max="10" step="0.001" value="0">
+                        <input type="number" class="number-input" id="kp-num" min="0" max="10" step="0.001" value="0.000">
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <label>Integral Gain (Ki) <span class="unit-val" id="ki-val">0.000</span></label>
+                    <div class="slider-container">
+                        <input type="range" class="slider-input" id="ki-slider" min="0" max="5" step="0.001" value="0">
+                        <input type="number" class="number-input" id="ki-num" min="0" max="5" step="0.001" value="0.000">
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <label>Derivative Gain (Kd) <span class="unit-val" id="kd-val">0.000</span></label>
+                    <div class="slider-container">
+                        <input type="range" class="slider-input" id="kd-slider" min="0" max="2" step="0.001" value="0">
+                        <input type="number" class="number-input" id="kd-num" min="0" max="2" step="0.001" value="0.000">
+                    </div>
+                </div>
+
+                <button class="btn" id="apply-btn">Apply Gains</button>
+            </div>
+
+            <!-- Jog panel -->
+            <div class="glass-card mt-auto">
+                <div class="section-title">Quick Test Command</div>
+                <div class="control-group">
+                    <div class="jog-grid">
+                        <button class="btn btn-secondary" id="jog-ccw-btn">◀ CW</button>
+                        <div style="display: flex; flex-direction: column; align-items: center;">
+                            <input type="number" class="number-input" id="jog-step-input" value="15" style="width: 55px; font-weight:600;">
+                            <span style="font-size: 0.65rem; color: var(--text-secondary); margin-top:2px;">degrees</span>
+                        </div>
+                        <button class="btn btn-secondary" id="jog-cw-btn">CCW ▶</button>
+                    </div>
+                </div>
+                <div class="button-row">
+                    <button class="btn btn-stop" id="stop-btn">Soft Stop</button>
+                    <button class="btn btn-secondary" id="gohome-btn">Go Home</button>
+                </div>
+            </div>
+
+            <!-- Performance Log -->
+            <div class="glass-card">
+                <div class="section-title">Performance Log</div>
+                <div id="perf-log" style="height: 150px; overflow-y: auto; background: #181f30; border: 1px solid var(--border-color); border-radius: 8px; padding: 0.5rem; font-family: monospace; font-size: 0.75rem; color: #a1a1aa;">
+                    <div style="color: var(--text-secondary);">Waiting for first move...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right charts panel -->
+        <div class="charts-container">
+            <!-- Chart 1: Position -->
+            <div class="glass-card chart-card">
+                <div class="chart-header">
+                    <div class="chart-title">Position Tracking Profile</div>
+                    <div class="chart-legend">
+                        <div class="legend-item"><div class="legend-dot" style="background: var(--accent-purple);"></div><span>S-Curve Tgt</span></div>
+                        <div class="legend-item"><div class="legend-dot" style="background: var(--accent-pink);"></div><span>S-Curve Cmd</span></div>
+                        <div class="legend-item"><div class="legend-dot" style="background: var(--accent-cyan);"></div><span>ZVD Shaped</span></div>
+                        <div class="legend-item"><div class="legend-dot" style="background: var(--accent-emerald);"></div><span>Kalman Actual</span></div>
+                    </div>
+                </div>
+                <div class="chart-wrapper" id="posChart"></div>
+            </div>
+
+            <!-- Chart 2: Velocity -->
+            <div class="glass-card chart-card">
+                <div class="chart-header">
+                    <div class="chart-title">Velocity Tracking Profile</div>
+                    <div class="chart-legend">
+                        <div class="legend-item"><div class="legend-dot" style="background: var(--accent-cyan);"></div><span>Velocity Cmd</span></div>
+                        <div class="legend-item"><div class="legend-dot" style="background: var(--accent-emerald);"></div><span>Kalman Actual</span></div>
+                    </div>
+                </div>
+                <div class="chart-wrapper" id="velChart"></div>
+            </div>
+
+            <!-- Chart 3: PWM & Integrals -->
+            <div class="glass-card chart-card">
+                <div class="chart-header">
+                    <div class="chart-title">PWM Command & PID Integrals</div>
+                    <div class="chart-legend">
+                        <div class="legend-item"><div class="legend-dot" style="background: var(--accent-cyan);"></div><span>Pos Integral</span></div>
+                        <div class="legend-item"><div class="legend-dot" style="background: var(--accent-yellow);"></div><span>Spd Integral</span></div>
+                        <div class="legend-item"><div class="legend-dot" style="background: var(--accent-orange);"></div><span>Motor PWM</span></div>
+                    </div>
+                </div>
+                <div class="chart-wrapper" id="pwmChart"></div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // WebSocket config
+        const WS_URL = 'ws://localhost:8765';
+        let socket = null;
+        let isPaused = false;
+        let activeGains = { 0: { kp: 0, ki: 0, kd: 0 }, 1: { kp: 0, ki: 0, kd: 0 } };
+
+        // DOM elements
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+        const fsmBadge = document.getElementById('fsm-badge');
+        const statPos = document.getElementById('stat-pos');
+        const statVel = document.getElementById('stat-vel');
+        const statFaultDesc = document.getElementById('stat-fault-desc');
+        const statFaultBox = document.getElementById('stat-fault-box');
+        
+        // Tuning controls
+        const loopSelect = document.getElementById('loop-select');
+        const kpSlider = document.getElementById('kp-slider');
+        const kpNum = document.getElementById('kp-num');
+        const kpValLabel = document.getElementById('kp-val');
+        const kiSlider = document.getElementById('ki-slider');
+        const kiNum = document.getElementById('ki-num');
+        const kiValLabel = document.getElementById('ki-val');
+        const kdSlider = document.getElementById('kd-slider');
+        const kdNum = document.getElementById('kd-num');
+        const kdValLabel = document.getElementById('kd-val');
+        const applyBtn = document.getElementById('apply-btn');
+
+        // Test commands
+        const jogCcwBtn = document.getElementById('jog-ccw-btn');
+        const jogCwBtn = document.getElementById('jog-cw-btn');
+        const jogStepInput = document.getElementById('jog-step-input');
+        const stopBtn = document.getElementById('stop-btn');
+        const gohomeBtn = document.getElementById('gohome-btn');
+        const pauseBtn = document.getElementById('pause-btn');
+
+        // Chart definitions
+        const maxPoints = 250; // rolling window size (2.5s of data)
+
+        // Helper to generate consistent uPlot options
+        function createPlotOptions(seriesConfig) {
+            return {
+                width: 100,  // Auto-resized by ResizeObserver
+                height: 100, // Auto-resized by ResizeObserver
+                legend: { show: false },
+                cursor: { show: true },
+                select: { show: false },
+                series: [
+                    {
+                        // X-axis (ticks / time)
+                        value: (u, v) => v == null ? "-" : v.toFixed(0),
+                    },
+                    ...seriesConfig
+                ],
+                axes: [
+                    {
+                        stroke: "#9ca3af",
+                        grid: { show: false },
+                        font: "10px Inter, sans-serif"
+                    },
+                    {
+                        stroke: "#9ca3af",
+                        grid: {
+                            show: true,
+                            stroke: "rgba(255, 255, 255, 0.05)",
+                            width: 1
+                        },
+                        font: "10px Inter, sans-serif"
+                    }
+                ]
+            };
+        }
+
+        const posOpts = createPlotOptions([
+            { label: 'S-Curve Tgt', stroke: '#8b5cf6', width: 1.5 },
+            { label: 'S-Curve Cmd', stroke: '#ec4899', width: 1.5 },
+            { label: 'ZVD Shaped', stroke: '#06b6d4', width: 1.5 },
+            { label: 'Kalman Actual', stroke: '#10b981', width: 2 }
+        ]);
+
+        const velOpts = createPlotOptions([
+            { label: 'Velocity Cmd', stroke: '#06b6d4', width: 1.5 },
+            { label: 'Kalman Actual', stroke: '#10b981', width: 2 }
+        ]);
+
+        const pwmOpts = createPlotOptions([
+            { label: 'Pos Integral', stroke: '#06b6d4', width: 1.5 },
+            { label: 'Spd Integral', stroke: '#f59e0b', width: 1.5 },
+            { label: 'Motor PWM', stroke: '#f97316', width: 1.5 }
+        ]);
+
+        // Placeholders to initialize charts properly
+        let posData = [[0], [0], [0], [0], [0]];
+        let velData = [[0], [0], [0]];
+        let pwmData = [[0], [0], [0], [0]];
+
+        let isFirstPosData = true;
+        let isFirstVelData = true;
+        let isFirstPwmData = true;
+
+        const posChart = new uPlot(posOpts, posData, document.getElementById('posChart'));
+        const velChart = new uPlot(velOpts, velData, document.getElementById('velChart'));
+        const pwmChart = new uPlot(pwmOpts, pwmData, document.getElementById('pwmChart'));
+
+        // Make uPlot resize with its CSS grid containers
+        function makeResponsive(plot, elementId) {
+            const container = document.getElementById(elementId);
+            const resizeObserver = new ResizeObserver(entries => {
+                for (let entry of entries) {
+                    const { width, height } = entry.contentRect;
+                    plot.setSize({ width: Math.floor(width), height: Math.floor(height) });
+                }
+            });
+            resizeObserver.observe(container);
+        }
+
+        makeResponsive(posChart, 'posChart');
+        makeResponsive(velChart, 'velChart');
+        makeResponsive(pwmChart, 'pwmChart');
+
+        // Sync inputs
+        function syncTuningInputs(kp, ki, kd) {
+            kpSlider.value = kp;
+            kpNum.value = kp.toFixed(3);
+            kpValLabel.textContent = kp.toFixed(3);
+
+            kiSlider.value = ki;
+            kiNum.value = ki.toFixed(3);
+            kiValLabel.textContent = ki.toFixed(3);
+
+            kdSlider.value = kd;
+            kdNum.value = kd.toFixed(3);
+            kdValLabel.textContent = kd.toFixed(3);
+        }
+
+        function handleGainUpdate(loop, kp, ki, kd) {
+            activeGains[loop] = { kp, ki, kd };
+            if (parseInt(loopSelect.value) === loop) {
+                syncTuningInputs(kp, ki, kd);
+            }
+        }
+
+        // Event listeners for tuning controls
+        loopSelect.addEventListener('change', () => {
+            const loop = parseInt(loopSelect.value);
+            const gains = activeGains[loop];
+            syncTuningInputs(gains.kp, gains.ki, gains.kd);
+            
+            // Query current gains by telling the robot to switch loop
+            // which prompts the firmware to write the gains into registers
+            sendWsMessage({ action: 'write_reg', reg: 0x36, val: loop });
+        });
+
+        function setupSync(slider, num, label) {
+            slider.addEventListener('input', () => {
+                const val = parseFloat(slider.value);
+                num.value = val.toFixed(3);
+                label.textContent = val.toFixed(3);
+            });
+            num.addEventListener('change', () => {
+                let val = parseFloat(num.value);
+                const min = parseFloat(slider.min);
+                const max = parseFloat(slider.max);
+                if (isNaN(val)) val = min;
+                if (val < min) val = min;
+                if (val > max) val = max;
+                num.value = val.toFixed(3);
+                slider.value = val;
+                label.textContent = val.toFixed(3);
+            });
+        }
+        setupSync(kpSlider, kpNum, kpValLabel);
+        setupSync(kiSlider, kiNum, kiValLabel);
+        setupSync(kdSlider, kdNum, kdValLabel);
+
+        // Apply Gains handler
+        applyBtn.addEventListener('click', () => {
+            const loop = parseInt(loopSelect.value);
+            const kpRaw = Math.round(parseFloat(kpSlider.value) * 1000);
+            const kiRaw = Math.round(parseFloat(kiSlider.value) * 1000);
+            const kdRaw = Math.round(parseFloat(kdSlider.value) * 1000);
+
+            // Send register writes sequentially
+            sendWsMessage({ action: 'write_reg', reg: 0x36, val: loop });       // AT_LOOP
+            sendWsMessage({ action: 'write_reg', reg: 0x38, val: kpRaw });      // KP
+            sendWsMessage({ action: 'write_reg', reg: 0x39, val: kiRaw });      // KI
+            sendWsMessage({ action: 'write_reg', reg: 0x3A, val: kdRaw });      // KD
+            sendWsMessage({ action: 'write_reg', reg: 0x33, val: 2 });          // AT_CMD = 2 (APPLY_GAINS)
+            
+            // Instantly update activeGains cache locally
+            activeGains[loop] = { kp: kpRaw / 1000.0, ki: kiRaw / 1000.0, kd: kdRaw / 1000.0 };
+            console.log(`Applied gains: Loop ${loop} | Kp=${kpRaw/1000} Ki=${kiRaw/1000} Kd=${kdRaw/1000}`);
+        });
+
+        // Jog triggers (note sign inversion to match GUI coordinate systems)
+        jogCcwBtn.addEventListener('click', () => {
+            const deg = parseInt(jogStepInput.value);
+            if (!isNaN(deg)) {
+                // CW = negative step size in GUI, which is positive in firmware
+                const step = -deg; 
+                sendWsMessage({ action: 'write_reg', reg: 0x05, val: step });
+                sendWsMessage({ action: 'write_reg', reg: 0x01, val: 2 }); // Mode 2 = JOG
+            }
+        });
+
+        jogCwBtn.addEventListener('click', () => {
+            const deg = parseInt(jogStepInput.value);
+            if (!isNaN(deg)) {
+                // CCW = positive step size in GUI, which is negative in firmware
+                const step = deg; 
+                sendWsMessage({ action: 'write_reg', reg: 0x05, val: step });
+                sendWsMessage({ action: 'write_reg', reg: 0x01, val: 2 }); // Mode 2 = JOG
+            }
+        });
+
+        stopBtn.addEventListener('click', () => {
+            sendWsMessage({ action: 'write_reg', reg: 0x25, val: 1 }); // Soft stop
+            setTimeout(() => {
+                sendWsMessage({ action: 'write_reg', reg: 0x25, val: 0 }); // clear latch
+            }, 100);
+        });
+
+        gohomeBtn.addEventListener('click', () => {
+            sendWsMessage({ action: 'write_reg', reg: 0x01, val: 1 }); // Mode 1 = HOME
+        });
+
+        pauseBtn.addEventListener('click', () => {
+            isPaused = !isPaused;
+            pauseBtn.textContent = isPaused ? "Resume Graph" : "Pause Graph";
+            pauseBtn.classList.toggle('btn-secondary', !isPaused);
+        });
+
+        // Send WebSocket packet helper
+        function sendWsMessage(obj) {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify(obj));
+            } else {
+                console.warn("WebSocket not connected - command dropped", obj);
+            }
+        }
+
+        // FSM states mapping
+        const FSM_STATES = {
+            0: { label: 'INIT', class: 'badge-init' },
+            1: { label: 'HOMING', class: 'badge-homing' },
+            2: { label: 'IDLE', class: 'badge-idle' },
+            3: { label: 'RUNNING', class: 'badge-running' },
+            4: { label: 'FAULT', class: 'badge-fault' }
+        };
+
+        const FAULT_CODES = {
+            0x00: 'None',
+            0x01: 'Hardware E-Stop Activated',
+            0x02: 'Homing: Edge B Not Found',
+            0x03: 'Homing: Sensor Never Cleared',
+            0x04: 'Homing: Sensor Not Found',
+            0x10: 'Joystick Emergency Tripped',
+            0x20: 'Heartbeat Watchdog Timeout',
+            0x40: 'Safety: Encoder Cable Disconnect',
+            0x41: 'Safety: Cable Limit Exceeded',
+            0x42: 'Safety: Overcurrent Tripped',
+            0x43: 'Safety: Position Tracking Jam'
+        };
+
+        // Connect WebSocket
+        function connect() {
+            socket = new WebSocket(WS_URL);
+
+            socket.onopen = () => {
+                console.log('Connected to serial bridge WebSocket');
+                statusDot.classList.add('connected');
+                statusText.textContent = 'Connected';
+                
+                // Query current active gains for loop 0 (velocity) on connection
+                setTimeout(() => {
+                    sendWsMessage({ action: 'write_reg', reg: 0x36, val: 0 });
+                }, 500);
+            };
+
+            socket.onmessage = (event) => {
+                const lines = event.data.split('\n');
+                lines.forEach(line => {
+                    parseTelemetryLine(line.trim());
+                });
+            };
+
+            socket.onclose = () => {
+                console.log('Disconnected from serial bridge. Reconnecting...');
+                statusDot.classList.remove('connected');
+                statusText.textContent = 'Disconnected';
+                setTimeout(connect, 1000);
+            };
+
+            socket.onerror = (err) => {
+                console.error('WebSocket error:', err);
+                socket.close();
+            };
+        }
+
+        // Performance Logging
+        const perfLog = document.getElementById('perf-log');
+        let currentMove = null;
+
+        function logPerformance(msg) {
+            if (perfLog.children.length === 1 && perfLog.children[0].textContent.includes('Waiting')) {
+                perfLog.innerHTML = '';
+            }
+            const timeStr = new Date().toLocaleTimeString('en-US', { hour12: false, hour: "numeric", minute: "numeric", second: "numeric" });
+            const p = document.createElement('div');
+            p.textContent = `[${timeStr}] ${msg}`;
+            p.style.marginBottom = '4px';
+            perfLog.appendChild(p);
+            perfLog.scrollTop = perfLog.scrollHeight;
+        }
+
+        function trackPerformance(tick, tgt, shp, p_act) {
+            if (!currentMove) {
+                currentMove = { tgt: tgt, startPos: p_act, startTime: tick, maxDev: 0, shpDone: false, settleTime: 0, deadbandTicks: 0 };
+            }
+            
+            // New move detected
+            if (Math.abs(tgt - currentMove.tgt) > 0.05) {
+                let dist = Math.abs(currentMove.tgt - currentMove.startPos);
+                if (currentMove.shpDone && dist > 1.0) {
+                    let os = (currentMove.maxDev / dist) * 100;
+                    let settle = currentMove.settleTime > 0 ? (currentMove.settleTime / 1000).toFixed(2) + "s" : "Timeout";
+                    logPerformance(`Move ${dist.toFixed(1)}° -> OS: ${os.toFixed(1)}%, Settled: ${settle}`);
+                }
+                currentMove = { tgt: tgt, startPos: p_act, startTime: tick, maxDev: 0, shpDone: false, settleTime: 0, deadbandTicks: 0 };
+            }
+            
+            // Track Overshoot (deviation past target)
+            let dev = 0;
+            if (tgt > currentMove.startPos && p_act > tgt) dev = p_act - tgt;
+            if (tgt < currentMove.startPos && p_act < tgt) dev = currentMove.tgt - p_act;
+            if (dev > currentMove.maxDev) currentMove.maxDev = dev;
+            
+            // Check if S-curve done
+            if (!currentMove.shpDone && Math.abs(shp - tgt) < 0.01) {
+                currentMove.shpDone = true;
+                currentMove.shpDoneTime = tick;
+            }
+            
+            // Track Settling Time
+            if (currentMove.shpDone && currentMove.settleTime === 0) {
+                let dist = Math.abs(currentMove.tgt - currentMove.startPos);
+                let threshold = Math.max(dist * 0.01, 0.2); // 1% or 0.2 degrees
+                
+                if (Math.abs(p_act - tgt) <= threshold) {
+                    currentMove.deadbandTicks++;
+                    if (currentMove.deadbandTicks >= 50) { // 500ms stable
+                        currentMove.settleTime = tick - 500 - currentMove.shpDoneTime;
+                        if (currentMove.settleTime < 0) currentMove.settleTime = 0;
+                    }
+                } else {
+                    currentMove.deadbandTicks = 0;
+                }
+            }
+        }
+
+        // Telemetry parsing
+        function parseTelemetryLine(line) {
+            if (line.startsWith('$ST,')) {
+                // Format: $ST,fsm_state,run_mode,fault_code,heartbeat_reg
+                const p = line.split(',');
+                if (p.length >= 4) {
+                    const fsm = parseInt(p[1]);
+                    const fault = parseInt(p[3]);
+                    updateStateUI(fsm, fault);
+                }
+            }
+            else if (line.startsWith('$GAINS,')) {
+                // Format: $GAINS,loop,kp*1000,ki*1000,kd*1000
+                const p = line.split(',');
+                if (p.length >= 5) {
+                    const loop = parseInt(p[1]);
+                    const kp = parseInt(p[2]) / 1000.0;
+                    const ki = parseInt(p[3]) / 1000.0;
+                    const kd = parseInt(p[4]) / 1000.0;
+                    handleGainUpdate(loop, kp, ki, kd);
+                }
+            }
+            else if (line.startsWith('$CTRL,')) {
+                // Format: $CTRL,tick,tgt,pos,shp,p_act,p_err,v_cmd,v_act,v_err,pwm,pos_i,spd_i
+                const p = line.split(',');
+                if (p.length >= 13) {
+                    const tick  = parseInt(p[1]);
+                    const tgt   = parseInt(p[2]) / 10.0;
+                    const pos   = parseInt(p[3]) / 10.0;
+                    const shp   = parseInt(p[4]) / 10.0;
+                    const p_act = parseInt(p[5]) / 100.0;
+                    const p_err = parseInt(p[6]) / 100.0;
+                    const v_cmd = parseInt(p[7]) / 10.0;
+                    const v_act = parseInt(p[8]) / 10.0;
+                    const v_err = parseInt(p[9]) / 10.0;
+                    const pwm   = parseInt(p[10]) / 10.0;
+                    const pos_i = parseInt(p[11]) / 10.0;
+                    const spd_i = parseInt(p[12]) / 10.0;
+
+                    // Update UI numeric values
+                    statPos.textContent = p_act.toFixed(2) + '°';
+                    statVel.textContent = v_act.toFixed(1) + '°/s';
+
+                    trackPerformance(tick, tgt, shp, p_act);
+
+                    if (!isPaused) {
+                        pushChartData(tick, tgt, pos, shp, p_act, p_err, v_cmd, v_act, v_err, pwm, pos_i, spd_i);
+                    }
+                }
+            }
+        }
+
+        function updateStateUI(fsm, fault) {
+            const state = FSM_STATES[fsm] || { label: 'UNKNOWN', class: 'badge-idle' };
+            fsmBadge.textContent = state.label;
+            fsmBadge.className = 'badge ' + state.class;
+
+            if (fault > 0) {
+                const desc = FAULT_CODES[fault] || `Error 0x${fault.toString(16).toUpperCase()}`;
+                statFaultDesc.textContent = desc;
+                statFaultDesc.className = 'text-red';
+                statFaultBox.style.border = '1px solid rgba(239, 68, 68, 0.2)';
+                statFaultBox.style.background = 'rgba(239, 68, 68, 0.02)';
+            } else {
+                statFaultDesc.textContent = 'None';
+                statFaultDesc.className = 'text-emerald';
+                statFaultBox.style.border = '1px solid var(--border-color)';
+                statFaultBox.style.background = 'none';
+            }
+        }
+
+        // Pushing data to charts
+        function pushChartData(tick, tgt, pos, shp, p_act, p_err, v_cmd, v_act, v_err, pwm, pos_i, spd_i) {
+            // 1. Position Chart
+            if (isFirstPosData) {
+                posData = [[], [], [], [], []];
+                isFirstPosData = false;
+            }
+            posData[0].push(tick);
+            posData[1].push(tgt);
+            posData[2].push(pos);
+            posData[3].push(shp);
+            posData[4].push(p_act);
+            if (posData[0].length > maxPoints) {
+                posData[0].shift();
+                posData[1].shift();
+                posData[2].shift();
+                posData[3].shift();
+                posData[4].shift();
+            }
+            posChart.setData(posData);
+
+            // 2. Velocity Chart
+            if (isFirstVelData) {
+                velData = [[], [], []];
+                isFirstVelData = false;
+            }
+            velData[0].push(tick);
+            velData[1].push(v_cmd);
+            velData[2].push(v_act);
+            if (velData[0].length > maxPoints) {
+                velData[0].shift();
+                velData[1].shift();
+                velData[2].shift();
+            }
+            velChart.setData(velData);
+
+            // 3. PWM and Integrators Chart
+            if (isFirstPwmData) {
+                pwmData = [[], [], [], []];
+                isFirstPwmData = false;
+            }
+            pwmData[0].push(tick);
+            pwmData[1].push(pos_i);
+            pwmData[2].push(spd_i);
+            pwmData[3].push(pwm);
+            if (pwmData[0].length > maxPoints) {
+                pwmData[0].shift();
+                pwmData[1].shift();
+                pwmData[2].shift();
+                pwmData[3].shift();
+            }
+            pwmChart.setData(pwmData);
+        }
+
+        // Start connection
+        connect();
+    </script>
+</body>
+</html>

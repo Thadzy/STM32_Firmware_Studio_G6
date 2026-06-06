@@ -63,7 +63,7 @@
 /* --- PID Gains — Position loop (outer, 100 Hz) -----------------------------*/
 #define PID_POS_KP              3.0f
 #define PID_POS_KI              0.02f
-#define PID_POS_KD              0.0f
+#define PID_POS_KD              0.15f
 #define PID_POS_IMAX            100.0f  /* integral clamp (rad)               */
 
 /* --- Feedforward Gains -----------------------------------------------------*/
@@ -71,7 +71,7 @@
    FF_ACCEL    : acceleration FF to inner loop.     Units: PWM / (rad/s²)     */
 #define FF_VELOCITY             3.03f
 #define FF_ACCEL                0.1f
-#define FF_DISTURBANCE          0.0f
+#define FF_DISTURBANCE          4.0f
 
 /* --- S-Curve Trajectory Limits ---------------------------------------------*/
 #define SCURVE_VMAX_RADS        7.304f      /* rad/s   — maximum velocity     */
@@ -94,11 +94,11 @@
 
 /* --- Kalman Filter ---------------------------------------------------------*/
 #define KALMAN_DT               0.001f      /* 1 ms — matches TIM6 period     */
-#define KALMAN_Q_POS            1e-6f       /* process noise — position       */
-#define KALMAN_Q_VEL            1e-4f       /* process noise — velocity       */
-#define KALMAN_Q_ACC            1e-2f       /* process noise — acceleration   */
+#define KALMAN_Q_POS            1e-5f       /* process noise — position       */
+#define KALMAN_Q_VEL            1e-3f       /* process noise — velocity       */
+#define KALMAN_Q_ACC            0.1f        /* process noise — acceleration   */
 #define KALMAN_Q_JERK           1.0f        /* process noise — jerk           */
-#define KALMAN_R_POS            0.1f        /* measurement noise — position   */
+#define KALMAN_R_POS            2e-6f       /* measurement noise — position   */
 
 /* --- Position settling window ----------------------------------------------*/
 #define POSITION_DEADBAND_RAD   0.0175f     /* ≈ 1° — IsAtTarget threshold    */

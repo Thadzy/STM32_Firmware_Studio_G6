@@ -9,6 +9,7 @@
 #include "test_phase2_safety.h"  /* g_test_inj injection hooks for commissioning */
 #include <math.h>
 #include <string.h>
+#include <stdio.h>
 
 extern TIM_HandleTypeDef htim3;
 
@@ -119,7 +120,6 @@ static uint32_t s_at_settle_t0;   /* HAL_GetTick() when SETTLING began       */
 
 /* Telemetry formatting buffer — written only from Tick100Hz (TIM6 ISR),
    so single-context; no re-entrancy concern.                                */
-static char s_tel_buf[64];
 
 /* -------------------------------------------------------------------------
    Software safety stack — 1-ms persistence counters
@@ -158,9 +158,10 @@ static float scurve_stop_dist(float vel, float acc)
     float d_a = vel * t_a + 0.5f * acc * t_a * t_a
                 - (1.0f / 6.0f) * s_sc_jmax * t_a * t_a * t_a;
 
-    float d_bc = (v_a > 0.0f)
-                 ? v_a * v_a / (2.0f * s_sc_amax) * 1.5f
-                 : 0.0f;
+    float d_bc = 0.0f;
+    if (v_a > 0.0f) {
+        d_bc = (v_a * v_a) / (2.0f * s_sc_amax) + (v_a * s_sc_amax) / (2.0f * s_sc_jmax);
+    }
 
     return d_a + d_bc;
 }
@@ -171,8 +172,9 @@ static void scurve_step(float dt)
 
     float dist = s_sc.target - s_sc.pos;
 
-    /* Done if very close and nearly stopped */
-    if (fabsf(dist) < 0.001f && fabsf(s_sc.vel) < 0.01f) {
+    /* Done if very close and nearly stopped. 
+       Thresholds widened to prevent discrete time chattering on tiny moves. */
+    if (fabsf(dist) < 0.05f && fabsf(s_sc.vel) < 0.5f) {
         s_sc.pos  = s_sc.target;
         s_sc.vel  = 0.0f;
         s_sc.acc  = 0.0f;
@@ -210,6 +212,17 @@ static void scurve_step(float dt)
     if (s_sc.vel < -SCURVE_VMAX_RADS) s_sc.vel = -SCURVE_VMAX_RADS;
 
     s_sc.pos += s_sc.vel * dt;
+
+    /* Anti-chatter: If we crossed the target this tick, snap to it.
+       This completely prevents infinite discrete-time oscillation on tiny moves
+       where huge jerk values cause repeated target overshooting. */
+    float new_dist = s_sc.target - s_sc.pos;
+    if ((dist > 0.0f && new_dist <= 0.0f) || (dist < 0.0f && new_dist >= 0.0f)) {
+        s_sc.pos  = s_sc.target;
+        s_sc.vel  = 0.0f;
+        s_sc.acc  = 0.0f;
+        s_sc.done = true;
+    }
 }
 
 /* -------------------------------------------------------------------------
@@ -222,18 +235,33 @@ void MotorCtrl_SetPidGains(uint8_t loop, float kp, float ki, float kd)
        __disable_irq disables all maskable interrupts; the window is
        3 × STR instructions ≈ 18 ns at 170 MHz — negligible jitter.         */
     __disable_irq();
-    if (loop == AT_LOOP_POSITION) {
+    if (loop == 1) { // 1 = Position loop
         s_pid_pos_kp   = kp;
         s_pid_pos_ki   = ki;
         s_pid_pos_kd   = kd;
         s_pos_integral = 0.0f;   /* bumpless transition */
-    } else {
+    } else {         // 0 = Velocity loop
         s_pid_spd_kp   = kp;
         s_pid_spd_ki   = ki;
         s_pid_spd_kd   = kd;
         s_spd_integral = 0.0f;
     }
     __enable_irq();
+}
+
+float MotorCtrl_GetKp(uint8_t loop)
+{
+    return (loop == 1) ? s_pid_pos_kp : s_pid_spd_kp;
+}
+
+float MotorCtrl_GetKi(uint8_t loop)
+{
+    return (loop == 1) ? s_pid_pos_ki : s_pid_spd_ki;
+}
+
+float MotorCtrl_GetKd(uint8_t loop)
+{
+    return (loop == 1) ? s_pid_pos_kd : s_pid_spd_kd;
 }
 
 void MotorCtrl_Init(void)
@@ -375,6 +403,12 @@ void MotorCtrl_Zero(float home_offset_rad)
        All PID/Kalman state is re-seeded from the new origin.                */
     s_homing_mode  = false;
     s_pos_counts   = (int64_t)(home_offset_rad * RAD_TO_COUNTS);
+    
+    /* Reset the physical hardware timer counter to match the new logical position */
+    uint16_t new_enc = (uint16_t)(s_pos_counts & 0xFFFF);
+    __HAL_TIM_SET_COUNTER(&htim3, new_enc);
+    s_last_enc     = new_enc;
+
     Kalman_Init(&s_kalman, home_offset_rad);
     s_sc.pos       = home_offset_rad;
     s_sc.vel       = 0.0f;
@@ -522,6 +556,13 @@ void MotorCtrl_Tick1kHz(void)
 
     /* Conditional integration — pause when speed is already saturated       */
     float u_ff = FF_VELOCITY * s_vel_sp + FF_ACCEL * s_acc_sp;
+    if (!s_homing_mode) {
+        if (s_vel_sp > 0.01f) {
+            u_ff += FF_DISTURBANCE;
+        } else if (s_vel_sp < -0.01f) {
+            u_ff -= FF_DISTURBANCE;
+        }
+    }
     if (fabsf(u_ff) < (float)MOTOR_PWM_MAX - 1.0f) {
         s_spd_integral += vel_err * DT_INNER;
     }
@@ -542,6 +583,9 @@ void MotorCtrl_Tick1kHz(void)
     if (u < -(float)MOTOR_PWM_MAX) u = -(float)MOTOR_PWM_MAX;
 
     int16_t pwm = (int16_t)lroundf(u);
+
+    /* Dead-zone compensation is now handled by Coulomb friction feedforward (FF_DISTURBANCE). */
+
     g_robot.motion.motor_pwm = pwm;
     Motor_SetPWM(pwm);
 
@@ -772,6 +816,14 @@ void MotorCtrl_Tick100Hz(void)
         goto send_telemetry;
     }
 
+    /* Anti-stiction boost: if S-Curve is done but we are stuck outside the deadband,
+       the normal Ki=0.02 takes 10s to build up enough PWM to break static friction.
+       Boost Ki dynamically when velocity is near zero to settle quickly. */
+    float dynamic_ki = s_pid_pos_ki;
+    if (s_sc.done && fabsf(s_kalman.x[1]) < VELOCITY_SETTLED_RADS) {
+        dynamic_ki *= 25.0f; /* Winds up in ~400ms instead of 10s */
+    }
+
     s_pos_integral += pos_err * DT_OUTER;
     if (s_pos_integral >  PID_POS_IMAX) s_pos_integral =  PID_POS_IMAX;
     if (s_pos_integral < -PID_POS_IMAX) s_pos_integral = -PID_POS_IMAX;
@@ -780,7 +832,7 @@ void MotorCtrl_Tick100Hz(void)
     s_pos_prev_meas = pos_actual;
 
     float vel_cmd = s_pid_pos_kp * pos_err          /* live-adjustable gains */
-                  + s_pid_pos_ki * s_pos_integral
+                  + dynamic_ki * s_pos_integral
                   + s_pid_pos_kd * d_meas;
 
     /* Clamp velocity command to ±Vmax */
@@ -799,6 +851,7 @@ send_telemetry:
        UartDma_SendTelemetry_T() drops silently if the TX watermark is hit.
        ─────────────────────────────────────────────────────────────────────── */
     {
+        /* 1. Send standard $T telemetry for compatibility with existing dashboard */
         int16_t pos_x10 = (int16_t)lroundf(s_kalman.x[0] * (180.0f / M_PI) * 10.0f);
         int16_t vel_x10 = (int16_t)lroundf(s_kalman.x[1] * 10.0f);
         int16_t acc_x10 = (int16_t)lroundf(s_kalman.x[2] * 10.0f);
@@ -806,6 +859,28 @@ send_telemetry:
         if (!UartDma_SendTelemetry_T(HAL_GetTick(), pos_x10, vel_x10, acc_x10, co_x10)) {
             g_robot.comms.telemetry_drops++;
         }
+
+        /* 2. Send detailed $CTRL debug telemetry for the tuning dashboard */
+        static char ctrl_buf[140];
+        int16_t sc_tgt_x10  = (int16_t)lroundf(s_sc.target * (180.0f / M_PI) * 10.0f);
+        int16_t sc_pos_x10  = (int16_t)lroundf(s_sc.pos * (180.0f / M_PI) * 10.0f);
+        int16_t sh_pos_x10  = (int16_t)lroundf(shaped * (180.0f / M_PI) * 10.0f);
+        int16_t kal_pos_x100 = (int16_t)lroundf(s_kalman.x[0] * (180.0f / M_PI) * 100.0f);
+        int16_t pos_err_x100 = (int16_t)lroundf(pos_err * (180.0f / M_PI) * 100.0f);
+        int16_t vel_sp_x10  = (int16_t)lroundf(s_vel_sp * (180.0f / M_PI) * 10.0f);
+        int16_t kal_vel_x10 = (int16_t)lroundf(s_kalman.x[1] * (180.0f / M_PI) * 10.0f);
+        int16_t vel_err_x10 = (int16_t)lroundf((s_vel_sp - s_kalman.x[1]) * (180.0f / M_PI) * 10.0f);
+        int16_t pwm_x10     = (int16_t)(g_robot.motion.motor_pwm * 10);
+        int16_t pos_int_x10 = (int16_t)lroundf(s_pos_integral * (180.0f / M_PI) * 10.0f);
+        int16_t spd_int_x10 = (int16_t)lroundf(s_spd_integral * 10.0f);
+
+        snprintf(ctrl_buf, sizeof(ctrl_buf),
+                 "$CTRL,%lu,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d\r\n",
+                 (unsigned long)HAL_GetTick(),
+                 sc_tgt_x10, sc_pos_x10, sh_pos_x10, kal_pos_x100, pos_err_x100,
+                 vel_sp_x10, kal_vel_x10, vel_err_x10, pwm_x10, pos_int_x10, spd_int_x10);
+
+        UartDma_SendTelemetry(ctrl_buf);
     }
 }
 

@@ -30,6 +30,7 @@ import time
 import threading
 import queue
 import asyncio
+import json
 
 try:
     import websockets
@@ -51,25 +52,68 @@ SLAVE_ADDR   = 21        # 0x15  Modbus slave address of the robot
 DEBUG        = True      # print telemetry + frame logs to console
 LOG_RATE_S   = 2.0       # min seconds between repeated BAD-CRC log lines
 
+# ── Heartbeat proxy ──────────────────────────────────────────────────────────
+# The base system does not send the HI (18537) reply to the robot's YA (22881)
+# heartbeat.  Without it the firmware's 2-second watchdog fires continuously
+# (fault_code=0x20), which the base system interprets as a fault and blocks
+# the Auto command.  The bridge handles the heartbeat reply on behalf of the PC.
+HB_YA              = 22881   # 'YA' — robot sends this every 200 ms
+HB_HI              = 18537   # 'HI' — PC must reply with this
+HB_SEND_INTERVAL_S = 0.4     # send HI every 400 ms (well inside 2000 ms timeout)
+
 _REG_NAMES = {
+    # ── WRITE registers (PC → robot) ────────────────────────────────────────
     0x00: 'heartbeat',
-    0x01: 'control_mode',
-    0x02: 'target_pos_deg',
-    0x03: 'target_vel_rps',
-    0x04: 'target_acc_rps2',
-    0x10: 'kp_pos',
-    0x11: 'ki_pos',
-    0x12: 'kd_pos',
-    0x13: 'kp_vel',
-    0x14: 'ki_vel',
-    0x15: 'kd_vel',
-    0x20: 'fsm_state',
-    0x21: 'current_pos_counts',
-    0x22: 'current_vel_rps',
-    0x23: 'current_acc_rps2',
-    0x24: 'motor_pwm',
-    0x30: 'sensor_bits',
-    0x31: 'fault_estop',
+    0x01: 'mode',           # 1=Home 2=Jog 4=Auto 8=SetHome 16=Test
+    0x02: 'manual_gripper', # 0=Up 1=Down 2=Open 4=Close
+    0x03: 'gripper_seq',    # 1=Pick 2=Place
+    0x04: 'gripper_auto_en',# bit0 enable
+    0x05: 'jog_step_deg',   # int16 degrees; +CCW -CW
+    0x06: 'test_type',
+    0x07: 'perf_vel',
+    0x08: 'perf_acc',
+    0x09: 'prec_init_pos',
+    0x10: 'prec_final_pos',
+    0x11: 'prec_repeat',
+    # 0x12–0x21: pick/place sequence slots (int16: magnitude=index, sign=direction)
+    0x12: 'slot0_pick1',
+    0x13: 'slot1_place1',
+    0x14: 'slot2_pick2',
+    0x15: 'slot3_place2',
+    0x16: 'slot4_pick3',
+    0x17: 'slot5_place3',
+    0x18: 'slot6_pick4',
+    0x19: 'slot7_place4',
+    0x1A: 'slot8_pick5',
+    0x1B: 'slot9_place5',
+    0x1C: 'slot10_pick6',
+    0x1D: 'slot11_place6',
+    0x1E: 'slot12_pick7',
+    0x1F: 'slot13_place7',
+    0x20: 'slot14_pick8',
+    0x21: 'slot15_place8',
+    0x22: 'n_pairs',        # number of pick+place pairs (max 8)
+    0x23: 'p2p_unit',       # 0=degree 1=index
+    0x24: 'p2p_target',     # int16 target
+    0x25: 'soft_stop',      # bit0
+    # ── READ registers (robot → PC) ─────────────────────────────────────────
+    0x26: 'reed_sensors',   # bit0=Reed1 bit1=Reed2 bit2=Reed3(jaw)
+    0x27: 'task',           # bit0=Homing 1=GoPick 2=GoPlace 3=GoPoint
+    0x28: 'pos_deg_x10',
+    0x29: 'vel_dps_x10',
+    0x30: 'acc_dps2_x10',
+    0x31: 'emergency',      # bit0=estop bits15-8=fault_code
+    0x32: 'home_offset_deg',# int16 fine-tune offset in whole degrees
+    0x33: 'at_cmd',         # 0=Idle 1=Start 2=Apply 3=Abort
+    0x34: 'at_relay_amp',   # relay amplitude
+    0x35: 'at_setpoint',    # operating setpoint (deg)
+    0x36: 'at_loop',        # 0=Velocity 1=Position
+    0x37: 'at_hysteresis',  # dead-band (deg)
+    0x38: 'at_new_kp',      # tuned Kp
+    0x39: 'at_new_ki',      # tuned Ki
+    0x3A: 'at_new_kd',      # tuned Kd
+    0x3B: 'at_status',      # status (0=Idle ... 4=Fault)
+    0x3C: 'at_cycles',      # completed oscillation cycles
 }
 
 # ── CRC-16 (Modbus) ────────────────────────────────────────────────────────
@@ -88,6 +132,34 @@ def _crc_ok(frame: bytes) -> bool:
     expected = _crc16(frame[:-2])
     received = frame[-2] | (frame[-1] << 8)
     return expected == received
+
+
+def _make_fc06(reg: int, val: int) -> bytes:
+    """Build a valid Modbus FC06 write-single-register frame."""
+    payload = bytes([SLAVE_ADDR, 0x06,
+                     (reg >> 8) & 0xFF, reg & 0xFF,
+                     (val >> 8) & 0xFF, val & 0xFF])
+    crc = _crc16(payload)
+    return payload + bytes([crc & 0xFF, crc >> 8])
+
+
+# ── heartbeat proxy thread ────────────────────────────────────────────────────
+def _heartbeat_thread() -> None:
+    """
+    Send HI (18537) to robot reg 0x00 every HB_SEND_INTERVAL_S.
+    This keeps the firmware heartbeat watchdog alive when the base system
+    does not implement the YA/HI reply protocol.
+    The robot echoes every FC06 write; _robot_reader absorbs those echoes
+    using _hb_pending so the base system never sees them.
+    """
+    global _hb_pending
+    _last_hb_log = 0.0
+    while not _stop.is_set():
+        frame = _make_fc06(0x00, HB_HI)
+        with _hb_lock:
+            _hb_pending += 1
+        _to_robot.put(frame)
+        _stop.wait(HB_SEND_INTERVAL_S)
 
 
 # ── serial read helper ─────────────────────────────────────────────────────
@@ -112,6 +184,31 @@ _stop       = threading.Event()
 _ws_clients: set = set()
 _ws_lock    = threading.Lock()
 
+# Heartbeat proxy: count of bridge-injected HI writes awaiting robot echo.
+# The echo is absorbed so it is not forwarded to the base system on COM10.
+_hb_lock    = threading.Lock()
+_hb_pending = 0
+
+
+# ── HTTP Server for Dashboard ────────────────────────────────────────────────
+def _http_server_thread() -> None:
+    import http.server
+    import socketserver
+
+    class QuietHandler(http.server.SimpleHTTPRequestHandler):
+        def log_message(self, format, *args):
+            pass  # Suppress request spam in the console
+
+    port = 8000
+    while port < 8010:
+        try:
+            socketserver.TCPServer.allow_reuse_address = True
+            with socketserver.TCPServer(("", port), QuietHandler) as httpd:
+                print(f"[http] Dashboard served at → http://localhost:{port}/controller_dashboard.html")
+                httpd.serve_forever()
+        except OSError:
+            port += 1
+
 
 # ── robot reader thread ────────────────────────────────────────────────────
 def _robot_reader(ser: serial.Serial) -> None:
@@ -124,6 +221,13 @@ def _robot_reader(ser: serial.Serial) -> None:
     _last_log_t = 0.0   # last time a BAD-CRC line was printed
     _last_tel_t = 0.0   # last time telemetry was printed to console
     _last_rx_t  = 0.0   # last time Modbus RX was printed to console
+    _last_fault = None
+    _last_estop = None
+    _last_fsm_state = None
+    _last_run_mode  = None
+    _last_fault_code = None
+    _ctrl_was_active = False
+    _tel_was_active  = False
 
     try:
         while not _stop.is_set():
@@ -140,21 +244,108 @@ def _robot_reader(ser: serial.Serial) -> None:
                 _ws_q.put(line)
                 if DEBUG:
                     now = time.monotonic()
-                    if now - _last_tel_t >= 0.5:
-                        _last_tel_t = now
-                        _FSM = {0:'INIT',1:'HOMING',2:'IDLE',3:'RUNNING',4:'FAULT'}
-                        if line.startswith('$ST,'):
-                            p = line.split(',')
-                            if len(p) >= 4:
-                                fsm_n = _FSM.get(int(p[1]), f'?{p[1]}')
-                                fault = int(p[3]) if p[3].lstrip('-').isdigit() else 0
+                    _FSM = {0:'INIT', 1:'HOMING', 2:'IDLE', 3:'RUNNING', 4:'FAULT'}
+                    _FAULT_DESCS = {
+                        0x00: 'None',
+                        0x01: 'Hardware E-Stop Activated',
+                        0x02: 'Homing: Edge B Not Found',
+                        0x03: 'Homing: Sensor Never Cleared',
+                        0x04: 'Homing: Sensor Not Found',
+                        0x10: 'Joystick Emergency Tripped',
+                        0x20: 'Heartbeat Watchdog Timeout',
+                        0x40: 'Safety: Encoder Cable Disconnect',
+                        0x41: 'Safety: Cable Limit Exceeded',
+                        0x42: 'Safety: Overcurrent Tripped',
+                        0x43: 'Safety: Position Tracking Jam'
+                    }
+                    if line.startswith('$ST,'):
+                        p = line.split(',')
+                        if len(p) >= 4:
+                            fsm = int(p[1]) if p[1].lstrip('-').isdigit() else 0
+                            fsm_n = _FSM.get(fsm, f'?{fsm}')
+                            run_mode = int(p[2]) if p[2].lstrip('-').isdigit() else 0
+                            fault = int(p[3]) if p[3].lstrip('-').isdigit() else 0
+                            fault_desc = _FAULT_DESCS.get(fault, f'Unknown 0x{fault:02X}')
+                            if (fsm != _last_fsm_state) or (run_mode != _last_run_mode) or (fault != _last_fault_code):
+                                _last_fsm_state = fsm
+                                _last_run_mode = run_mode
+                                _last_fault_code = fault
                                 alert = '  *** ROBOT IN FAULT — press RESET button on hardware ***' \
-                                        if int(p[1]) == 4 else ''
-                                print(f"[STATE] FSM={fsm_n}  run={p[2]}  fault=0x{fault:02X}{alert}")
-                            else:
-                                print(f"[tel] {line}")
+                                        if fsm == 4 else ''
+                                print(f"[STATE] FSM={fsm_n:<7} | run_mode={run_mode} | fault=0x{fault:02X} ({fault_desc}){alert}")
                         else:
-                            print(f"[tel] {line}")
+                            print(f"[STATE] {line}")
+                    elif line.startswith('$AUTO,'):
+                        p = line.split(',')
+                        if len(p) >= 2 and p[1] == 'DONE':
+                            print(f"[AUTO] Sequence DONE after {p[2] if len(p)>2 else '?'} steps")
+                        elif len(p) >= 4:
+                            step = p[1]
+                            raw  = int(p[2])
+                            tgt  = int(p[3]) / 10.0
+                            pick = (int(step) % 2 == 0)
+                            print(f"[AUTO] step={step} ({'PICK' if pick else 'PLACE'})  raw={raw}  target={tgt:.1f}°")
+                        else:
+                            print(f"[AUTO] {line}")
+                    elif line.startswith('$HOM,'):
+                        print(f"[HOMING] {line[5:]}")
+                    elif line.startswith('$GAINS,'):
+                        p = line.split(',')
+                        if len(p) >= 5:
+                            loop = int(p[1])
+                            loop_name = "Velocity (Inner)" if loop == 0 else "Position (Outer)"
+                            kp = int(p[2]) / 1000.0
+                            ki = int(p[3]) / 1000.0
+                            kd = int(p[4]) / 1000.0
+                            print(f"[GAINS] {loop_name} Loop | Kp={kp:.3f} | Ki={ki:.3f} | Kd={kd:.3f}")
+                    elif line.startswith('$CTRL,'):
+                        p = line.split(',')
+                        if len(p) >= 13:
+                            tick  = int(p[1])
+                            tgt   = int(p[2]) / 10.0
+                            pos   = int(p[3]) / 10.0
+                            shp   = int(p[4]) / 10.0
+                            p_act = int(p[5]) / 100.0
+                            p_err = int(p[6]) / 100.0
+                            v_cmd = int(p[7]) / 10.0
+                            v_act = int(p[8]) / 10.0
+                            v_err = int(p[9]) / 10.0
+                            pwm   = int(p[10]) / 10.0
+                            pos_i = int(p[11]) / 10.0
+                            spd_i = int(p[12]) / 10.0
+                            
+                            is_active = (abs(v_cmd) > 0.1) or (abs(v_act) > 0.1) or (abs(pwm) > 1.0) or (_last_fsm_state in (1, 3))
+                            if is_active:
+                                _ctrl_was_active = True
+                                if now - _last_tel_t >= 0.5:
+                                    _last_tel_t = now
+                                    print(f"[CTRL] Tick={tick:<6} | Pos Tgt/Shp/Act: {tgt:>5.1f}° / {shp:>5.1f}° / {p_act:>6.2f}° (Err: {p_err:>5.2f}°)\n"
+                                          f"       PWM={pwm:>6.1f}% | Vel Cmd/Act: {v_cmd:>6.1f}°/s / {v_act:>6.1f}°/s (Err: {v_err:>5.1f}°/s)\n"
+                                          f"       PID Integrals | Pos: {pos_i:>5.2f} | Spd: {spd_i:>5.2f}")
+                            elif _ctrl_was_active:
+                                _ctrl_was_active = False
+                                print(f"[CTRL] Motor Stopped | Tick={tick:<6} | Pos={p_act:>5.1f}°")
+                    elif line.startswith('$T,'):
+                        p = line.split(',')
+                        if len(p) >= 6:
+                            tick = int(p[1])
+                            pos  = int(p[2]) / 10.0
+                            vel  = int(p[3]) / 10.0
+                            acc  = int(p[4]) / 10.0
+                            pwm  = int(p[5]) / 10.0
+                            
+                            is_active = (abs(vel) > 0.1) or (abs(pwm) > 1.0) or (_last_fsm_state in (1, 3))
+                            if is_active:
+                                _tel_was_active = True
+                                if now - _last_tel_t >= 0.5:
+                                    _last_tel_t = now
+                                    print(f"[TELE] Tick={tick:<6} | Pos={pos:>5.1f}° | Vel={vel:>5.1f}°/s | Acc={acc:>5.1f}°/s² | PWM={pwm:>5.1f}%")
+                            elif _tel_was_active:
+                                _tel_was_active = False
+                                print(f"[TELE] Motor Stopped | Tick={tick:<6} | Pos={pos:>5.1f}°")
+                    elif now - _last_tel_t >= 0.5:
+                        _last_tel_t = now
+                        print(f"[tel] {line}")
                 continue
 
             # ── Modbus response from robot ────────────────────────────────────
@@ -198,32 +389,46 @@ def _robot_reader(ser: serial.Serial) -> None:
 
             if _crc_ok(frame):
                 _bad_count = 0
+
+                # ── absorb FC06 echo for bridge-injected HI heartbeat writes ──
+                # The robot echoes every FC06 write verbatim.  If we injected a
+                # HI write, consume that echo silently so the base system never
+                # sees a FC06 frame it didn't send (which would confuse it).
+                if fc == 0x06 and len(frame) == 8:
+                    _reg_addr = (frame[2] << 8) | frame[3]
+                    _reg_val  = (frame[4] << 8) | frame[5]
+                    if _reg_addr == 0x00 and _reg_val == HB_HI:
+                        with _hb_lock:
+                            global _hb_pending
+                            if _hb_pending > 0:
+                                _hb_pending -= 1
+                                continue   # drop echo — not forwarded to COM10
+
                 _to_com10.put(frame)
                 if DEBUG and fc == 0x03 and len(frame) == 105:
-                    now = time.monotonic()
-                    if now - _last_rx_t >= 0.5:
-                        _last_rx_t = now
-                        def _reg(addr):
-                            o = 3 + addr * 2
-                            return (frame[o] << 8) | frame[o + 1]
-                        hb   = _reg(0x00)
-                        emg  = _reg(0x31)
-                        estop  = bool(emg & 0x01)
-                        fcode  = emg >> 8
-                        _FAULT_DESC = {
-                            0x00: 'none',
-                            0x01: 'estop trip',
-                            0x02: 'homing: edge-B not found',
-                            0x03: 'homing: sensor stuck ON',
-                            0x04: 'homing: sensor not found in sweep',
-                            0x10: 'joystick emergency',
-                            0x20: 'prev heartbeat timeout (harmless — link now OK)',
-                        }
-                        fdesc = _FAULT_DESC.get(fcode, f'unknown 0x{fcode:02X}')
+                    def _reg(addr):
+                        o = 3 + addr * 2
+                        return (frame[o] << 8) | frame[o + 1]
+                    hb   = _reg(0x00)
+                    emg  = _reg(0x31)
+                    estop  = bool(emg & 0x01)
+                    fcode  = emg >> 8
+                    _FAULT_DESC = {
+                        0x00: 'none',
+                        0x01: 'estop trip',
+                        0x02: 'homing: edge-B not found',
+                        0x03: 'homing: sensor stuck ON',
+                        0x04: 'homing: sensor not found in sweep',
+                        0x10: 'joystick emergency',
+                        0x20: 'prev heartbeat timeout (harmless — link now OK)',
+                    }
+                    fdesc = _FAULT_DESC.get(fcode, f'unknown 0x{fcode:02X}')
+                    
+                    if fcode != _last_fault or estop != _last_estop:
+                        _last_fault = fcode
+                        _last_estop = estop
                         blocking = fcode not in (0, 0x20)
-                        print(f"[rx] FC03 OK  hb=0x{hb:04X}{'←YA' if hb==22881 else ''}"
-                              f"  estop={'YES !!!' if estop else 'no'}"
-                              f"  fault={fdesc}"
+                        print(f"[STATUS] fault={fdesc} | estop={'YES !!!' if estop else 'no'}"
                               f"{'  → PRESS RESET BTN on hardware' if blocking else ''}")
             else:
                 _bad_count += 1
@@ -263,6 +468,7 @@ def _com10_reader(ser: serial.Serial) -> None:
     Read Modbus commands from COM10 (main.exe on COM11) → _to_robot queue.
     main.exe is trusted so we forward without CRC validation.
     """
+    _last_written_val = {}
     while not _stop.is_set():
         b1 = ser.read(1)
         if not b1:
@@ -309,23 +515,34 @@ def _com10_reader(ser: serial.Serial) -> None:
             if DEBUG and fc == 0x06:
                 reg = (frame[2] << 8) | frame[3]
                 val = (frame[4] << 8) | frame[5]
-                desc = _REG_NAMES.get(reg, f'reg0x{reg:02X}')
-                note = ''
-                if reg == 0x00 and val == 18537: note = '  ← HI (heartbeat reply)'
-                if reg == 0x01 and val == 1:     note = '  ← HOME command'
-                if reg == 0x01:                  note += f'  ← mode={val}'
-                print(f"[tx] FC06 {desc}={val}{note}")
+                if reg != 0x00:  # Suppress heartbeat logs to clean up console
+                    last_val = _last_written_val.get(reg)
+                    if last_val != val:
+                        _last_written_val[reg] = val
+                        desc = _REG_NAMES.get(reg, f'reg0x{reg:02X}')
+                        note = ''
+                        if reg == 0x01 and val == 1:     note = '  ← HOME command'
+                        elif reg == 0x01:                note = f'  ← mode={val}'
+                        print(f"[tx] FC06 {desc}={val}{note}")
             elif DEBUG and fc == 0x10:
                 # [addr fc start_hi start_lo count_hi count_lo bc data… crc lo hi]
                 start = (frame[2] << 8) | frame[3]
                 count = (frame[4] << 8) | frame[5]
                 data  = frame[7:7 + count * 2]
                 vals  = [ (data[i] << 8) | data[i + 1] for i in range(0, len(data), 2) ]
-                # show signed too, since slots are int16 (sign = direction)
-                def _s16(v): return v - 0x10000 if v >= 0x8000 else v
-                pairs = ', '.join(
-                    f'0x{start+k:02X}={v}({_s16(v)})' for k, v in enumerate(vals))
-                print(f"[tx] FC16 write {count} regs from 0x{start:02X}: {pairs}")
+                # Check if any value changed
+                changed = False
+                for k, v in enumerate(vals):
+                    reg = start + k
+                    if _last_written_val.get(reg) != v:
+                        _last_written_val[reg] = v
+                        changed = True
+                if changed:
+                    # show signed too, since slots are int16 (sign = direction)
+                    def _s16(v): return v - 0x10000 if v >= 0x8000 else v
+                    pairs = ', '.join(
+                        f'0x{start+k:02X}={v}({_s16(v)})' for k, v in enumerate(vals))
+                    print(f"[tx] FC16 write {count} regs from 0x{start:02X}: {pairs}")
             _to_robot.put(frame)
 
 
@@ -342,13 +559,31 @@ def _com10_writer(ser: serial.Serial) -> None:
 
 # ── WebSocket server ───────────────────────────────────────────────────────
 async def _ws_handler(ws, path=None) -> None:
-    """Accept a WebSocket client and keep the connection alive."""
+    """Accept a WebSocket client, process incoming commands, and handle disconnect."""
     addr = getattr(ws, 'remote_address', '?')
     print(f"[ws] Client connected:    {addr}")
     with _ws_lock:
         _ws_clients.add(ws)
     try:
-        await ws.wait_closed()
+        async for msg_str in ws:
+            try:
+                data = json.loads(msg_str)
+                action = data.get("action")
+                if action == "write_reg":
+                    reg = data.get("reg")
+                    val = data.get("val")
+                    if isinstance(reg, int) and isinstance(val, int):
+                        reg &= 0xFFFF
+                        val &= 0xFFFF
+                        frame = _make_fc06(reg, val)
+                        _to_robot.put(frame)
+                        if DEBUG:
+                            desc = _REG_NAMES.get(reg, f'reg0x{reg:02X}')
+                            print(f"[ws] Client {addr} write reg 0x{reg:02X} ({desc}) = {val}")
+            except Exception as e:
+                print(f"[ws] Error parsing client message: {e}")
+    except websockets.exceptions.ConnectionClosed:
+        pass
     finally:
         with _ws_lock:
             _ws_clients.discard(ws)
@@ -521,11 +756,18 @@ def main() -> None:
 
     # Launch I/O threads
     threading.Thread(
+        target=_http_server_thread, daemon=True, name="http-server"
+    ).start()
+    threading.Thread(
         target=_robot_reader, args=(ser_robot,), daemon=True, name="robot-rx"
     ).start()
     threading.Thread(
         target=_robot_writer, args=(ser_robot,), daemon=True, name="robot-tx"
     ).start()
+    threading.Thread(
+        target=_heartbeat_thread, daemon=True, name="heartbeat"
+    ).start()
+    print(f"[hb] Heartbeat proxy started — sending HI every {HB_SEND_INTERVAL_S*1000:.0f} ms")
 
     if ser_com10:
         threading.Thread(
@@ -534,6 +776,7 @@ def main() -> None:
         threading.Thread(
             target=_com10_writer, args=(ser_com10,), daemon=True, name="com10-tx"
         ).start()
+
 
     # Run WebSocket server — blocks until Ctrl+C
     try:

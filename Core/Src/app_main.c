@@ -62,7 +62,12 @@ static float    s_user_home_rad;    /* park position saved by SetHome (post-cali
 static int8_t   s_go_center_dir;    /* tracks last dir in HOM_GO_CENTER — avoids repeated HomingCreep calls */
 static uint32_t s_move_start_ms;   /* HAL_GetTick() when STATE_RUNNING was entered — move timeout ref */
 static uint32_t s_tel_tick;        /* last $ST telemetry send time */
-static uint16_t s_hb_last_val;     /* last observed value of Modbus reg 0x00 */
+#ifndef HB_YA
+#define HB_YA   22881u
+#endif
+#ifndef HB_HI
+#define HB_HI   18537u
+#endif
 static uint32_t s_hb_last_tick;    /* HAL_GetTick() when reg 0x00 last changed */
 
 /* =========================================================================
@@ -131,18 +136,39 @@ static void hom_dbg(const char *tag, float val1, float val2, float pos_deg)
     UartDma_SendTelemetry(s_dbg);
 }
 
-/* Resolve P2P target to radians given unit and signed raw value.
-   Index mode: 72 slots at 5° each → target = index × (5π/180).
-   Index 1 = 5°, index 72 = 360°.  Out-of-range → 0 (no move).             */
 static float resolve_target(int16_t raw, uint16_t unit)
 {
+    float current_deg = rad_to_deg(MotorCtrl_GetPosition_rad());
+    float target_deg_modulo;
+
     if (unit == 0u) {
-        return deg_to_rad((float)raw);
+        target_deg_modulo = (float)abs(raw);
     } else {
-        int16_t idx = (raw < 0) ? -raw : raw;
+        int16_t idx = abs(raw);
         if (idx < 1 || idx > (int16_t)P2P_INDEX_COUNT) return 0.0f;
-        return (float)idx * (5.0f * M_PI / 180.0f);
+        target_deg_modulo = (float)idx * 5.0f;
     }
+
+    /* Map target strictly to 0..359.99 */
+    target_deg_modulo = fmodf(target_deg_modulo, 360.0f);
+    if (target_deg_modulo < 0.0f) target_deg_modulo += 360.0f;
+
+    /* Base angle of the current revolution */
+    float base_360 = floorf(current_deg / 360.0f) * 360.0f;
+    float candidate_deg = base_360 + target_deg_modulo;
+
+    float diff = candidate_deg - current_deg;
+
+    /* Apply direction constraint */
+    if (raw > 0) {
+        /* CCW: MUST move in positive direction */
+        if (diff < 0.0f) candidate_deg += 360.0f;
+    } else if (raw < 0) {
+        /* CW: MUST move in negative direction */
+        if (diff > 0.0f) candidate_deg -= 360.0f;
+    }
+
+    return deg_to_rad(candidate_deg);
 }
 
 /* Update task register 0x27                                                 */
@@ -421,11 +447,14 @@ static void homing_run(void)
    ========================================================================= */
 static void auto_run(void)
 {
-    if (s_seq_pairs == 0 || s_seq_step >= s_seq_pairs * 2u || s_seq_step >= 16u) {
+    if (s_seq_pairs == 0 || s_seq_step > s_seq_pairs * 2u || s_seq_step > 16u) {
+        snprintf(s_dbg, sizeof(s_dbg), "$AUTO,DONE,%u\r\n", s_seq_step);
+        UartDma_SendTelemetry(s_dbg);
         g_robot.fsm         = STATE_IDLE;
         s_run_mode          = RUN_IDLE;
         s_gripper_triggered = false;
         set_task(0x0000);
+        ModbusBridge_SetReg(0x22, 0); /* Clear pairs so next tab switch doesn't auto-start */
         return;
     }
 
@@ -433,7 +462,10 @@ static void auto_run(void)
     if (s_seq_step > 0u && (!MotorCtrl_IsAtTarget() || s_grip != GRIP_IDLE)) return;
 
     /* Motor arrived. Start gripper sequence for this position (once per arrival).
-       Odd step = just arrived at pick; even non-zero step = just arrived at place. */
+       Odd step = just arrived at pick; even non-zero step = just arrived at place.
+       Re-read gripper enable here to handle race where 0x04 arrives after mode
+       arm (dashboard writes mode=4 before gripper_auto_en=1).                  */
+    s_gripper_en = (ModbusBridge_GetReg(0x04) & 0x01u) != 0u;
     if (s_seq_step > 0u && s_gripper_en && !s_gripper_triggered) {
         gripper_start((s_seq_step % 2u) == 1u); /* true=pick, false=place */
         s_gripper_triggered = true;
@@ -442,12 +474,40 @@ static void auto_run(void)
     s_gripper_triggered = false;
 
     /* Command next motor move */
-    uint8_t pair   = s_seq_step / 2u;
-    bool    pick   = (s_seq_step & 1u) == 0u;
-    int16_t raw    = s_seq_slots[pair * 2u + (pick ? 0u : 1u)];
-    float   target = resolve_target(raw, 1u); /* sequence always uses index */
+    float target;
+    if (s_seq_step == s_seq_pairs * 2u) {
+        /* Final move: return to the nearest home (nearest 360 degree multiple) 
+           to prevent the robot from violently unwinding backwards to 0.0! */
+        float current_deg = rad_to_deg(MotorCtrl_GetPosition_rad());
+        float nearest_360 = roundf(current_deg / 360.0f) * 360.0f;
+        target = deg_to_rad(nearest_360);
+        set_task(0x0008u); /* GoPoint */
+        snprintf(s_dbg, sizeof(s_dbg), "$AUTO,%u,HOME,%ld\r\n", s_seq_step, (long)nearest_360);
+    } else {
+        uint8_t pair   = s_seq_step / 2u;
+        bool    pick   = (s_seq_step & 1u) == 0u;
+        int16_t raw    = s_seq_slots[pair * 2u + (pick ? 0u : 1u)];
+        /* Base system leaves 0x23 at 0 (degrees), but slots are indices!
+           Force unit=1 to ensure proper 5° multiplication. */
+        target = resolve_target(raw, 1);
+        set_task(pick ? 0x0002u : 0x0004u);
 
-    set_task(pick ? 0x0002u : 0x0004u);
+        /* Log each commanded move: $AUTO,step,raw_slot,target_deg×10             */
+        snprintf(s_dbg, sizeof(s_dbg), "$AUTO,%u,%d,%ld\r\n",
+                 s_seq_step,
+                 (int)raw,
+                 (long)lroundf(target * (180.0f / M_PI) * 10.0f));
+    }
+
+    /* Step 0: sync S-curve from actual position before first move so the
+       outer-loop deadband does not swallow the first few position-PID ticks.
+       After homing/park the S-curve's internal pos matches reality, but a
+       SyncTrajectory call guarantees it regardless of any preceding stop.     */
+    if (s_seq_step == 0u) {
+        MotorCtrl_SyncTrajectory();   /* re-seeds S-curve + clears integrals  */
+    }
+
+    UartDma_SendTelemetry(s_dbg);
     MotorCtrl_SetTarget(target);
     s_seq_step++;
 }
@@ -683,6 +743,8 @@ static void fsm_run(void)
             uint8_t pairs = (uint8_t)ModbusBridge_GetReg(0x22);
             if (pairs > 0u) {
                 ModbusBridge_SetReg(0x01, 0); /* only consume mode when sequence is ready */
+                ModbusBridge_SetReg(0x24, 0); /* clear stale p2p_target so it doesn't
+                                                 fire a P2P move when auto finishes     */
                 s_seq_pairs  = (pairs > 8u) ? 8u : pairs;
                 s_gripper_en = (ModbusBridge_GetReg(0x04) & 0x01u) != 0u;
                 for (uint8_t i = 0; i < 16u; i++) {
@@ -693,6 +755,7 @@ static void fsm_run(void)
                 g_robot.fsm = STATE_RUNNING;
                 s_run_mode  = RUN_AUTO;
             }
+
         } else if (mode_reg & 0x08u) {                  /* SetHome          */
             ModbusBridge_SetReg(0x01, 0);
             /* Zero the encoder at the current physical position immediately.
@@ -745,6 +808,7 @@ static void fsm_run(void)
             MotorCtrl_Stop();
             g_robot.fsm = STATE_IDLE;
             s_run_mode  = RUN_IDLE;
+            ModbusBridge_SetReg(0x22, 0); /* Clear auto sequence state */
             break;
         }
         switch (s_run_mode) {
@@ -838,7 +902,6 @@ void App_Init(void)
     g_robot.dbg.safety.en_tracking_safety = false;
 
     /* Seed heartbeat tracker — gives 2 s window before timeout is enforced */
-    s_hb_last_val  = ModbusBridge_GetReg(0x00);
     s_hb_last_tick = HAL_GetTick();
 
     /* IWDG: LSI ≈ 32 kHz, PR=÷16 → 2 kHz → 100 counts = 50 ms timeout.
@@ -884,9 +947,9 @@ void App_Run(void)
     /* Heartbeat timeout — soft-stop to IDLE if PC link silent ≥ 2 s */
     {
         uint16_t hb_now = ModbusBridge_GetReg(0x00);
-        if (hb_now != s_hb_last_val) {
-            s_hb_last_val  = hb_now;
+        if (hb_now == HB_HI) {
             s_hb_last_tick = HAL_GetTick();
+            ModbusBridge_SetReg(0x00, HB_YA); /* Reset to YA immediately so PC/main.exe can see it and reply again */
             /* Link restored — clear the stale PC-link-lost code */
             if (g_robot.comms.fault_code == 0x20u)
                 g_robot.comms.fault_code = 0u;
