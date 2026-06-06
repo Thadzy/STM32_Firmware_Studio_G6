@@ -5,6 +5,7 @@
 #include "hw_io.h"
 #include "params.h"
 #include "main.h"
+#include "app_main.h"
 #include <string.h>
 #include <stdio.h>
 #include <math.h>
@@ -218,12 +219,30 @@ static void handle_fc16(const uint8_t *req, uint16_t len)
    ------------------------------------------------------------------------- */
 static void on_rx(const uint8_t *data, uint16_t len)
 {
+    /* Check for Dashboard string commands bypassing Modbus */
+    if (len >= 3 && data[0] == 'L' && data[1] == 'A' && data[2] == 'B') {
+        char cmd_buf[64] = {0};
+        uint16_t copy_len = len < sizeof(cmd_buf) ? len : (sizeof(cmd_buf) - 1);
+        memcpy(cmd_buf, data, copy_len);
+        for(int i=0; i<copy_len; i++){
+            if(cmd_buf[i] == '\r' || cmd_buf[i] == '\n'){
+                cmd_buf[i] = '\0';
+                break;
+            }
+        }
+        Dashboard_ParseCommand(cmd_buf);
+        return;
+    }
+
     if (len < MB_MIN_FRAME) return;
     if (data[0] != MB_ADDR) return;
 
     /* Verify CRC */
     uint16_t crc_recv = ((uint16_t)data[len-1] << 8) | data[len-2];
     if (crc16(data, len - 2u) != crc_recv) return;
+
+    /* Feed heartbeat watchdog on any valid Modbus packet from PC */
+    s_regs[0x00] = HB_HI;
 
     switch (data[1]) {
     case MB_FC_READ:   if (len >= 8) handle_fc03(data); break;

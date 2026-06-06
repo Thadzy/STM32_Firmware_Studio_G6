@@ -4,6 +4,7 @@
 #include "uart_dma_manager.h"
 #include "hw_io.h"
 #include "joystick.h"
+#include "canbus.h"
 #include "system_state.h"
 #include "params.h"
 #include "main.h"
@@ -457,7 +458,19 @@ static void homing_run(void)
    ========================================================================= */
 static void auto_run(void)
 {
-    if (s_seq_pairs == 0 || s_seq_step > s_seq_pairs * 2u || s_seq_step > 16u) {
+    if (s_seq_pairs == 0 || s_seq_step > s_seq_pairs * 2u + 1u || s_seq_step > 17u) {
+        /* Fallback / safety exit */
+        RobotState.fsm         = STATE_IDLE;
+        s_run_mode          = RUN_IDLE;
+        set_task(0x0000);
+        ModbusBridge_SetReg(0x22, 0);
+        return;
+    }
+
+    /* Wait: motor must be at target AND gripper must be idle before next action */
+    if (s_seq_step > 0u && (!MotorCtrl_IsAtTarget() || s_grip != GRIP_IDLE)) return;
+
+    if (s_seq_step == s_seq_pairs * 2u + 1u) {
         snprintf(s_dbg, sizeof(s_dbg), "$AUTO,DONE,%u\r\n", s_seq_step);
         UartDma_SendTelemetry(s_dbg);
         RobotState.fsm         = STATE_IDLE;
@@ -467,9 +480,6 @@ static void auto_run(void)
         ModbusBridge_SetReg(0x22, 0); /* Clear pairs so next tab switch doesn't auto-start */
         return;
     }
-
-    /* Wait: motor must be at target AND gripper must be idle before next action */
-    if (s_seq_step > 0u && (!MotorCtrl_IsAtTarget() || s_grip != GRIP_IDLE)) return;
 
     /* Motor arrived. Start gripper sequence for this position (once per arrival).
        Odd step = just arrived at pick; even non-zero step = just arrived at place.
@@ -550,6 +560,8 @@ static void auto_run(void)
 
 static void handle_joystick(void)
 {
+    static bool s_f_pressed = false;
+
     if (!s_joy_mode) {
         /* Mode switched away — release joystick velocity jog cleanly.
            Guard: do NOT cancel during STATE_RUNNING (PC discrete jog owns
@@ -565,6 +577,9 @@ static void handle_joystick(void)
     }
 
     JoyState_t joy = Joystick_GetState();
+    if (joy.base != 'F') {
+        s_f_pressed = false;
+    }
 
     if (!joy.connected) {
         /* Gamepad lost mid-jog — release cleanly so motor does not coast */
@@ -628,6 +643,13 @@ static void handle_joystick(void)
     case 'B':  gripper_start(false);      break;  /* Place sequence           */
     case 'U':  Gripper_SetVertical(true); break;  /* Manual arm up            */
     case 'D':  Gripper_SetVertical(false);break;  /* Manual arm down          */
+    case 'F':
+        if (!s_f_pressed) {
+            bool current_open = (HAL_GPIO_ReadPin(Gripper_Down_GPIO_Port, Gripper_Down_Pin) == GPIO_PIN_RESET);
+            Gripper_SetClaw(!current_open);
+            s_f_pressed = true;
+        }
+        break;
     case 'Y':
         RobotState.fsm = STATE_HOMING;
         s_hom       = HOM_INIT;
@@ -677,6 +699,13 @@ static void handle_joystick(void)
     case 'B':  gripper_start(false);       break;
     case 'U':  Gripper_SetVertical(true);  break;
     case 'D':  Gripper_SetVertical(false); break;
+    case 'F':
+        if (!s_f_pressed) {
+            bool current_open = (HAL_GPIO_ReadPin(Gripper_Down_GPIO_Port, Gripper_Down_Pin) == GPIO_PIN_RESET);
+            Gripper_SetClaw(!current_open);
+            s_f_pressed = true;
+        }
+        break;
     case 'Y':
         RobotState.fsm = STATE_HOMING;
         s_hom       = HOM_INIT;
@@ -694,12 +723,47 @@ static void handle_joystick(void)
    ========================================================================= */
 static void fsm_run(void)
 {
-    /* E-stop: NO switch to VCC, PULLDOWN — safe to enable, no false-triggers */
-    if (RobotState.sensors.estop && RobotState.fsm != STATE_FAULT) {
-        RobotState.fsm              = STATE_FAULT;
-        RobotState.comms.fault_code = 0x01u;
-        MotorCtrl_Stop();
-        set_task(0x0000);
+    /* ── Two-stage E-stop: stop-and-verify ──────────────────────────────────
+       Stage 1 (trigger):  debounced estop fires → motor stops IMMEDIATELY.
+       Stage 2 (verify):   wait ESTOP_VERIFY_MS with motor off.  Motor EMI
+                           disappears once PWM stops; a real button stays LOW.
+         • Pin still LOW  → real E-stop  → latch STATE_FAULT (0x01).
+         • Pin went HIGH  → was EMI noise → resume, no fault.              */
+    {
+        static bool     s_estop_verifying  = false;
+        static uint32_t s_estop_verify_t   = 0u;
+        static FsmState_t s_estop_prev_fsm = STATE_INIT;
+
+        if (s_estop_verifying) {
+            /* Motor already stopped.  Wait for EMI to dissipate. */
+            if (HAL_GetTick() - s_estop_verify_t >= ESTOP_VERIFY_MS) {
+                /* Re-read the raw pin RIGHT NOW (bypass debouncer) */
+                bool still_active =
+                    (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_RESET);
+                if (still_active) {
+                    /* Confirmed real E-stop press */
+                    RobotState.fsm              = STATE_FAULT;
+                    RobotState.comms.fault_code = 0x01u;
+                    set_task(0x0000);
+                } else {
+                    /* Was EMI noise — restore previous FSM state */
+                    RobotState.fsm = s_estop_prev_fsm;
+                    HwIo_ResetEstopDebounce();
+                }
+                s_estop_verifying = false;
+            }
+            return;   /* don't process any other FSM logic while verifying */
+        }
+
+        if (!RobotState.dbg.estop_disabled &&
+            RobotState.sensors.estop && RobotState.fsm != STATE_FAULT) {
+            /* Stage 1: IMMEDIATELY stop motor for safety */
+            MotorCtrl_Stop();
+            s_estop_prev_fsm  = RobotState.fsm;
+            s_estop_verifying = true;
+            s_estop_verify_t  = HAL_GetTick();
+            return;
+        }
     }
 
     uint16_t mode_reg = ModbusBridge_GetReg(0x01);
@@ -937,8 +1001,9 @@ static void fsm_run(void)
         break;
 
     case STATE_FAULT:
-        /* Latch — clear only if E-stop released AND reset button pressed    */
-        if (!RobotState.sensors.estop && HwIo_GetResetBtn()) {
+        /* Latch — clear only if E-stop released AND reset button pressed.
+           If estop_disabled is set, E-stop check is skipped — reset btn alone clears. */
+        if ((RobotState.dbg.estop_disabled || !RobotState.sensors.estop) && HwIo_GetResetBtn()) {
             RobotState.fsm                          = STATE_IDLE;
             RobotState.comms.fault_code             = 0u;
             RobotState.dbg.safety.tripped_encoder   = false;
@@ -954,11 +1019,50 @@ static void fsm_run(void)
    Public entry points
    ========================================================================= */
 
+void Dashboard_ParseCommand(const char* cmd)
+{
+    /* Acknowledge receipt of the dashboard command */
+    snprintf(s_dbg, sizeof(s_dbg), "$DASH,ACK,%.30s\r\n", cmd);
+    UartDma_SendTelemetry(s_dbg);
+
+    /* Very basic scaffolding for the dashboard commands */
+    if (strncmp(cmd, "LAB1_DECEL", 10) == 0) {
+        if (RobotState.fsm == STATE_IDLE) {
+            MotorCtrl_SetTarget(MotorCtrl_GetPosition_rad() + deg_to_rad(360.0f));
+            set_task(0x0008); 
+            s_move_start_ms = HAL_GetTick();
+            RobotState.fsm = STATE_RUNNING;
+            s_run_mode = RUN_POINT;
+        }
+    } else if (strncmp(cmd, "LAB2_STEP", 9) == 0) {
+        if (RobotState.fsm == STATE_IDLE) {
+            MotorCtrl_SetTarget(MotorCtrl_GetPosition_rad() + deg_to_rad(90.0f));
+            set_task(0x0008); 
+            s_move_start_ms = HAL_GetTick();
+            RobotState.fsm = STATE_RUNNING;
+            s_run_mode = RUN_POINT;
+        }
+    } else if (strncmp(cmd, "LAB4_CYCLE", 10) == 0) {
+        if (RobotState.fsm == STATE_IDLE) {
+            ModbusBridge_SetReg(0x22, 1); /* 1 pair */
+            s_seq_slots[0] = 1;
+            s_seq_slots[1] = 2;
+            s_seq_pairs = 1;
+            s_seq_step = 0;
+            s_gripper_triggered = false;
+            RobotState.fsm = STATE_RUNNING;
+            s_run_mode = RUN_AUTO;
+        }
+    }
+}
+
+
 void App_Init(void)
 {
     HwIo_Init();
     UartDma_Init();
     Joystick_Init();
+    CanBus_Init();
     MotorCtrl_Init();
     ModbusBridge_Init();
     Motor_Enable();
@@ -978,6 +1082,9 @@ void App_Init(void)
     RobotState.dbg.safety.en_encoder_health  = false;
     RobotState.dbg.safety.en_current_safety  = false;
     RobotState.dbg.safety.en_tracking_safety = false;
+    RobotState.dbg.last_fault                = 0u;
+    /* E-stop bypass — set to true in Live Expressions to disable ALL E-stop checks */
+    RobotState.dbg.estop_disabled            = false;
 
     /* Seed heartbeat tracker — gives 2 s window before timeout is enforced */
     s_hb_last_tick = HAL_GetTick();
@@ -1034,17 +1141,18 @@ void App_Run(void)
         }
         uint32_t hb_age = HAL_GetTick() - s_hb_last_tick;
         RobotState.dbg.hb_age_ms = (hb_age > 0xFFFFu) ? 0xFFFFu : (uint16_t)hb_age;
-        /* Do not interrupt homing — it has its own safety limits (FAULT codes 2-4).
-           Stopping mid-sweep corrupts edge detection and causes 0.4°/12s creep. */
+        /* Heartbeat timeout check disabled to allow running without PC serial connection */
+        /*
         if (hb_age >= HEARTBEAT_TIMEOUT_MS &&
             RobotState.fsm != STATE_FAULT    &&
             RobotState.fsm != STATE_HOMING) {
             MotorCtrl_Stop();
             RobotState.fsm              = STATE_IDLE;
             s_run_mode               = RUN_IDLE;
-            RobotState.comms.fault_code = 0x20u; /* PC Link Lost */
+            RobotState.comms.fault_code = 0x20u; // PC Link Lost
             set_task(0x0000);
         }
+        */
     }
 
     /* Update debug mirror — expand RobotState in Live Expressions to see all */
@@ -1057,6 +1165,9 @@ void App_Run(void)
         RobotState.dbg.joy_conn = (uint8_t)_j.connected;
         RobotState.dbg.pos_deg  = rad_to_deg(MotorCtrl_GetPosition_rad());
         RobotState.dbg.vel_dps  = RobotState.motion.velocity_rps * 360.0f;
+        if (RobotState.comms.fault_code != 0u) {
+            RobotState.dbg.last_fault = RobotState.comms.fault_code;
+        }
     }
 
     /* Drain UART RX → Modbus callbacks → register updates */
@@ -1064,6 +1175,9 @@ void App_Run(void)
 
     /* Refresh Modbus read registers */
     ModbusBridge_Tick();
+
+    /* Tick CAN bus interface */
+    CanBus_Tick();
 
     /* Advance gripper sequence (runs independently of FSM) */
     gripper_seq_run();

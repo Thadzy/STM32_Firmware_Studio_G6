@@ -22,6 +22,12 @@ static void joy_rx_cb(const uint8_t *buf, uint16_t size)
             s_state.base      = b;
             s_state.emergency = e;
             s_state.connected = (s == 'C');
+
+            /* Handshake: echo action char back to ESP32 to trigger buzzer confirm beep */
+            if (b != 'O' || e != 'O') {
+                uint8_t echo = (uint8_t)b;
+                (void)UartDma_SendJoystick(&echo, 1u);
+            }
             return; /* take the first valid frame, ignore the rest           */
         }
     }

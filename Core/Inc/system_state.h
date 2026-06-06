@@ -34,8 +34,8 @@ typedef struct {
         volatile uint16_t raw_adc;         /* last raw ADC count             */
         volatile float    v_zero;          /* auto-calibrated zero voltage   */
         volatile float    current_amps;
-                 bool     selected_mode;   /* read on-demand, not from ISR   */
-                 bool     reset_btn;       /* read on-demand, not from ISR   */
+        volatile bool     selected_mode;   /* read on-demand, not from ISR   */
+        volatile bool     reset_btn;       /* read on-demand, not from ISR   */
     } sensors;
 
     /* --- Motion (written by motor_controller from TIM6 ISR 1 kHz) -------- */
@@ -87,11 +87,16 @@ typedef struct {
         float    pos_deg;
         float    vel_dps;
         uint16_t hb_age_ms; /* ms since last heartbeat register change */
+        uint8_t  last_fault; /* latest non-zero fault code */
 
         /* Motion tuning toggles — write live from Live Expressions, no recompile.
-           zvd_bypass : 1 = ZVD shaper off (S-curve direct), 0 = ZVD active.
-                        Set to 1 when rod not attached or ZVD params not tuned.  */
+           zvd_bypass     : 1 = ZVD shaper off (S-curve direct), 0 = ZVD active.
+                            Set to 1 when rod not attached or ZVD params not tuned.
+           estop_disabled : 1 = ALL E-stop checks bypassed (hardware + software).
+                            Use ONLY for debugging. Robot will NOT stop on E-stop press!
+                            Set back to 0 before any real operation.               */
         bool zvd_bypass;
+        volatile bool estop_disabled;
 
         /* Software Safety Stack -------------------------------------------
            en_*     : set false to disable a guard during commissioning

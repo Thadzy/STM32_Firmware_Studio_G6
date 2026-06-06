@@ -416,8 +416,9 @@ void MotorCtrl_Zero(float home_offset_rad)
    ------------------------------------------------------------------------- */
 void MotorCtrl_Tick1kHz(void)
 {
-    /* E-stop guard */
-    if (RobotState.sensors.estop) {
+    /* E-stop hard guard — only after stop-and-verify has CONFIRMED the fault.
+       Skipped entirely when estop_disabled = true (debug bypass).          */
+    if (!RobotState.dbg.estop_disabled && RobotState.comms.fault_code == 0x01u) {
         s_vel_sp = 0.0f;
         s_acc_sp = 0.0f;
         s_spd_integral = 0.0f;
