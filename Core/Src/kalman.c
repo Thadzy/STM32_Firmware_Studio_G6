@@ -1,5 +1,6 @@
 #include "kalman.h"
 #include "params.h"
+#include "system_state.h"
 #include <string.h>
 
 /* State-transition matrix F (constant, dt = KALMAN_DT = 0.001 s):
@@ -54,16 +55,16 @@ void Kalman_Update(KalmanState_t *k, float pos_meas_rad)
         P[i][3] = FP[i][0]*KF_DT3 + FP[i][1]*KF_DT2 + FP[i][2]*KF_DT + FP[i][3];
     }
     /* Add process noise Q (diagonal) */
-    P[0][0] += KALMAN_Q_POS;
-    P[1][1] += KALMAN_Q_VEL;
-    P[2][2] += KALMAN_Q_ACC;
-    P[3][3] += KALMAN_Q_JERK;
+    P[0][0] += TuningParams.kalman.q_pos;
+    P[1][1] += TuningParams.kalman.q_vel;
+    P[2][2] += TuningParams.kalman.q_acc;
+    P[3][3] += TuningParams.kalman.q_jerk;
 
     /* ----------------------------------------------------------------
        UPDATE: scalar measurement z = pos_meas_rad, H = [1 0 0 0]
        ---------------------------------------------------------------- */
     float y    = pos_meas_rad - x[0];           /* innovation               */
-    float S    = P[0][0] + KALMAN_R_POS;        /* innovation covariance    */
+    float S    = P[0][0] + TuningParams.kalman.r_pos;        /* innovation covariance    */
     float Sinv = 1.0f / S;
 
     /* Kalman gain K = P * H' / S  (H=[1,0,0,0] → K = first col of P / S)  */

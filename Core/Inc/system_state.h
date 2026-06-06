@@ -110,6 +110,58 @@ typedef struct {
 
 } RobotState_t;
 
-extern RobotState_t g_robot;
+extern RobotState_t RobotState;
+
+/* =========================================================================
+   Live Tuning Parameters
+   All variables grouped here can be modified in real-time using STM32CubeMonitor
+   or STM32CubeIDE Live Expressions.
+   ========================================================================= */
+typedef struct {
+    /* Outer Position Loop (100 Hz) */
+    struct {
+        float kp;
+        float ki;
+        float kd;
+    } pos_pid;
+
+    /* Inner Velocity Loop (1 kHz) */
+    struct {
+        float kp;
+        float ki;
+        float kd;
+    } spd_pid;
+
+    /* S-Curve Motion Profile Limits */
+    struct {
+        float vmax_rads;   /* Maximum velocity (rad/s)     */
+        float amax_rads2;  /* Maximum acceleration (rad/s²)*/
+        float jmax_rads3;  /* Maximum jerk (rad/s³)        */
+    } scurve;
+
+    /* Feedforward Gains */
+    struct {
+        float velocity;    /* V_feedforward (PWM / rad/s)  */
+        float accel;       /* A_feedforward (PWM / rad/s²) */
+        float disturbance; /* Coulomb friction (PWM)       */
+    } ff;
+
+    /* Kalman Filter Process/Measurement Noise */
+    struct {
+        float q_pos;       /* Process noise - position     */
+        float q_vel;       /* Process noise - velocity     */
+        float q_acc;       /* Process noise - acceleration */
+        float q_jerk;      /* Process noise - jerk         */
+        float r_pos;       /* Measurement noise - position */
+    } kalman;
+
+    /* Input Shaping */
+    struct {
+        bool bypass;       /* true = ZVD off (direct S-curve) */
+    } zvd;
+
+} TuningParams_t;
+
+extern TuningParams_t TuningParams;
 
 #endif /* __SYSTEM_STATE_H */

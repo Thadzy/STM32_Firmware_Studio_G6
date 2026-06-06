@@ -29,12 +29,12 @@ extern TIM_HandleTypeDef htim6;
    The arm steps between 0° and +90° (1.5708 rad) every 5 s.
    Telemetry is sent every 100 ms on LPUART1 (230400 8E1).
 
-   Live Expressions — add g_robot and expand:
-     g_robot.motion.position_counts  encoder count (raw)
-     g_robot.motion.velocity_rps     Kalman velocity (rev/s)
-     g_robot.motion.accel_rps2       Kalman acceleration (rev/s²)
-     g_robot.motion.motor_pwm        PWM command sent to motor
-     g_robot.sensors.estop           E-stop state (triggers motor off)
+   Live Expressions — add RobotState and expand:
+     RobotState.motion.position_counts  encoder count (raw)
+     RobotState.motion.velocity_rps     Kalman velocity (rev/s)
+     RobotState.motion.accel_rps2       Kalman acceleration (rev/s²)
+     RobotState.motion.motor_pwm        PWM command sent to motor
+     RobotState.sensors.estop           E-stop state (triggers motor off)
 
    Terminal output (230400 8E1):
      $MC3,pos_deg,vel_rads,acc_rads2,pwm\r\n
@@ -97,9 +97,9 @@ void TestPhase3_Run(void)
         t_telem = now;
 
         float pos_deg = MotorCtrl_GetPosition_rad() * (180.0f / M_PI);
-        float vel     = g_robot.motion.velocity_rps * (2.0f * M_PI); /* rad/s */
-        float acc     = g_robot.motion.accel_rps2  * (2.0f * M_PI);
-        int16_t pwm   = g_robot.motion.motor_pwm;
+        float vel     = RobotState.motion.velocity_rps * (2.0f * M_PI); /* rad/s */
+        float acc     = RobotState.motion.accel_rps2  * (2.0f * M_PI);
+        int16_t pwm   = RobotState.motion.motor_pwm;
 
         char buf[64];
         snprintf(buf, sizeof(buf), "$MC3,%.2f,%.3f,%.2f,%d\r\n",

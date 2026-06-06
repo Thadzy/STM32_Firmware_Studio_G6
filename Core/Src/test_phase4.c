@@ -16,10 +16,10 @@
    2. Send Mode=Home (0x01=1) → watch arm wiggle-search the proximity sensor
    3. After homing, use Jog (0x05 = step degrees, 0x01 = 2) to move arm
    4. Check Live Expressions:
-        g_robot.fsm            (0=INIT 1=HOMING 2=IDLE 3=RUNNING 4=FAULT)
-        g_robot.sensors.proximity
-        g_robot.motion.position_counts
-        g_robot.comms.heartbeat (should toggle 22881 ↔ 18537)
+        RobotState.fsm            (0=INIT 1=HOMING 2=IDLE 3=RUNNING 4=FAULT)
+        RobotState.sensors.proximity
+        RobotState.motion.position_counts
+        RobotState.comms.heartbeat (should toggle 22881 ↔ 18537)
    ========================================================================= */
 
 void TestPhase4_Init(void) { App_Init(); }

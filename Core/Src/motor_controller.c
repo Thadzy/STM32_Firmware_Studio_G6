@@ -61,14 +61,12 @@ static volatile bool  s_jog_active;
 static volatile float s_jog_vel_cmd;
 
 /* ---- Option 2: Jog step mode flag -----------------------------------------
-   s_jog_step  : true while jog step mode is engaged.  Guards s_zvd_bypass
+   s_jog_step  : true while jog step mode is engaged.  Guards TuningParams.zvd.bypass
                  from being overwritten by the live-expression debugger toggle
                  every outer-loop tick.
-   s_sc_amax/jmax : runtime S-curve limits; equal to SCURVE_ defaults during
+   TuningParams.scurve.amax_rads2/jmax : runtime S-curve limits; equal to SCURVE_ defaults during
                  normal moves and jog — no override needed.                    */
 static bool  s_jog_step;
-static float s_sc_amax;   /* current Amax (rad/s²) used by scurve_step()       */
-static float s_sc_jmax;   /* current Jmax (rad/s³) used by scurve_step()       */
 
 /* Speed PID state */
 static float s_spd_integral;
@@ -85,19 +83,6 @@ static uint8_t      s_zvd_head;
 static uint16_t     s_settle_ticks;
 
 static bool s_running;
-static bool s_zvd_bypass;  /* true during homing — no rod, no need for input shaping */
-
-/* -------------------------------------------------------------------------
-   Live-adjustable PID gains
-   Initialised from params.h constants; updated by MotorCtrl_SetPidGains().
-   Read from TIM6 ISR; written from main-loop inside a __disable_irq guard.
-   ------------------------------------------------------------------------- */
-static float s_pid_spd_kp = PID_SPEED_KP;
-static float s_pid_spd_ki = PID_SPEED_KI;
-static float s_pid_spd_kd = PID_SPEED_KD;
-static float s_pid_pos_kp = PID_POS_KP;
-static float s_pid_pos_ki = PID_POS_KI;
-static float s_pid_pos_kd = PID_POS_KD;
 
 /* -------------------------------------------------------------------------
    Auto-tune relay state machine
@@ -135,9 +120,9 @@ static void safety_trip(uint8_t code)
     s_spd_integral = 0.0f;
     s_running      = false;
     Motor_SetPWM(0);
-    if (g_robot.fsm != STATE_FAULT) {
-        g_robot.fsm              = STATE_FAULT;
-        g_robot.comms.fault_code = code;
+    if (RobotState.fsm != STATE_FAULT) {
+        RobotState.fsm              = STATE_FAULT;
+        RobotState.comms.fault_code = code;
     }
 }
 
@@ -151,16 +136,16 @@ static float scurve_stop_dist(float vel, float acc)
 {
     if (vel <= 0.0f) return 0.0f;
 
-    /* Uses runtime s_sc_jmax / s_sc_amax so Option-2 jog can raise limits
+    /* Uses runtime TuningParams.scurve.jmax_rads3 / TuningParams.scurve.amax_rads2 so Option-2 jog can raise limits
        without changing the stopping-distance calculation logic.              */
-    float t_a = (acc > 0.0f) ? acc / s_sc_jmax : 0.0f;
-    float v_a = vel + acc * t_a - 0.5f * s_sc_jmax * t_a * t_a;
+    float t_a = (acc > 0.0f) ? acc / TuningParams.scurve.jmax_rads3 : 0.0f;
+    float v_a = vel + acc * t_a - 0.5f * TuningParams.scurve.jmax_rads3 * t_a * t_a;
     float d_a = vel * t_a + 0.5f * acc * t_a * t_a
-                - (1.0f / 6.0f) * s_sc_jmax * t_a * t_a * t_a;
+                - (1.0f / 6.0f) * TuningParams.scurve.jmax_rads3 * t_a * t_a * t_a;
 
     float d_bc = 0.0f;
     if (v_a > 0.0f) {
-        d_bc = (v_a * v_a) / (2.0f * s_sc_amax) + (v_a * s_sc_amax) / (2.0f * s_sc_jmax);
+        d_bc = (v_a * v_a) / (2.0f * TuningParams.scurve.amax_rads2) + (v_a * TuningParams.scurve.amax_rads2) / (2.0f * TuningParams.scurve.jmax_rads3);
     }
 
     return d_a + d_bc;
@@ -189,27 +174,27 @@ static void scurve_step(float dt)
 
     float stop_dist = scurve_stop_dist(vel_dir, acc_dir);
 
-    /* Runtime limits: s_sc_amax / s_sc_jmax are the defaults from params.h
+    /* Runtime limits: TuningParams.scurve.amax_rads2 / TuningParams.scurve.jmax_rads3 are the defaults from params.h
        during normal operation.  JogStepEngage() raises them temporarily for
        Option-2 discrete stepping so each step completes before the next     */
     float jerk;
     if (abs_dist <= stop_dist) {
-        jerk = -s_sc_jmax * dir;
-    } else if (vel_dir >= SCURVE_VMAX_RADS - 0.01f) {
-        jerk = (acc_dir > 0.01f) ? -s_sc_jmax * dir : 0.0f;
-    } else if (acc_dir < s_sc_amax - 0.01f) {
-        jerk = s_sc_jmax * dir;
+        jerk = -TuningParams.scurve.jmax_rads3 * dir;
+    } else if (vel_dir >= TuningParams.scurve.vmax_rads - 0.01f) {
+        jerk = (acc_dir > 0.01f) ? -TuningParams.scurve.jmax_rads3 * dir : 0.0f;
+    } else if (acc_dir < TuningParams.scurve.amax_rads2 - 0.01f) {
+        jerk = TuningParams.scurve.jmax_rads3 * dir;
     } else {
         jerk = 0.0f;
     }
 
     s_sc.acc += jerk * dt;
-    if (s_sc.acc >  s_sc_amax) s_sc.acc =  s_sc_amax;
-    if (s_sc.acc < -s_sc_amax) s_sc.acc = -s_sc_amax;
+    if (s_sc.acc >  TuningParams.scurve.amax_rads2) s_sc.acc =  TuningParams.scurve.amax_rads2;
+    if (s_sc.acc < -TuningParams.scurve.amax_rads2) s_sc.acc = -TuningParams.scurve.amax_rads2;
 
     s_sc.vel += s_sc.acc * dt;
-    if (s_sc.vel >  SCURVE_VMAX_RADS) s_sc.vel =  SCURVE_VMAX_RADS;
-    if (s_sc.vel < -SCURVE_VMAX_RADS) s_sc.vel = -SCURVE_VMAX_RADS;
+    if (s_sc.vel >  TuningParams.scurve.vmax_rads) s_sc.vel =  TuningParams.scurve.vmax_rads;
+    if (s_sc.vel < -TuningParams.scurve.vmax_rads) s_sc.vel = -TuningParams.scurve.vmax_rads;
 
     s_sc.pos += s_sc.vel * dt;
 
@@ -236,14 +221,14 @@ void MotorCtrl_SetPidGains(uint8_t loop, float kp, float ki, float kd)
        3 × STR instructions ≈ 18 ns at 170 MHz — negligible jitter.         */
     __disable_irq();
     if (loop == 1) { // 1 = Position loop
-        s_pid_pos_kp   = kp;
-        s_pid_pos_ki   = ki;
-        s_pid_pos_kd   = kd;
+        TuningParams.pos_pid.kp   = kp;
+        TuningParams.pos_pid.ki   = ki;
+        TuningParams.pos_pid.kd   = kd;
         s_pos_integral = 0.0f;   /* bumpless transition */
     } else {         // 0 = Velocity loop
-        s_pid_spd_kp   = kp;
-        s_pid_spd_ki   = ki;
-        s_pid_spd_kd   = kd;
+        TuningParams.spd_pid.kp   = kp;
+        TuningParams.spd_pid.ki   = ki;
+        TuningParams.spd_pid.kd   = kd;
         s_spd_integral = 0.0f;
     }
     __enable_irq();
@@ -251,17 +236,17 @@ void MotorCtrl_SetPidGains(uint8_t loop, float kp, float ki, float kd)
 
 float MotorCtrl_GetKp(uint8_t loop)
 {
-    return (loop == 1) ? s_pid_pos_kp : s_pid_spd_kp;
+    return (loop == 1) ? TuningParams.pos_pid.kp : TuningParams.spd_pid.kp;
 }
 
 float MotorCtrl_GetKi(uint8_t loop)
 {
-    return (loop == 1) ? s_pid_pos_ki : s_pid_spd_ki;
+    return (loop == 1) ? TuningParams.pos_pid.ki : TuningParams.spd_pid.ki;
 }
 
 float MotorCtrl_GetKd(uint8_t loop)
 {
-    return (loop == 1) ? s_pid_pos_kd : s_pid_spd_kd;
+    return (loop == 1) ? TuningParams.pos_pid.kd : TuningParams.spd_pid.kd;
 }
 
 void MotorCtrl_Init(void)
@@ -289,8 +274,8 @@ void MotorCtrl_Init(void)
     s_jog_vel_cmd  = 0.0f;
 
     /* Runtime S-curve limits — match hardware-identified defaults */
-    s_sc_amax = SCURVE_AMAX_RADS2;
-    s_sc_jmax = SCURVE_JMAX_RADS3;
+    TuningParams.scurve.amax_rads2 = SCURVE_AMAX_RADS2;
+    TuningParams.scurve.jmax_rads3 = SCURVE_JMAX_RADS3;
 
     /* Auto-tune relay state */
     s_at_sm      = AT_SM_IDLE;
@@ -298,12 +283,12 @@ void MotorCtrl_Init(void)
     s_at_half_cyc = 0;
 
     /* Restore live PID gains to params.h defaults on re-init */
-    s_pid_spd_kp = PID_SPEED_KP;
-    s_pid_spd_ki = PID_SPEED_KI;
-    s_pid_spd_kd = PID_SPEED_KD;
-    s_pid_pos_kp = PID_POS_KP;
-    s_pid_pos_ki = PID_POS_KI;
-    s_pid_pos_kd = PID_POS_KD;
+    TuningParams.spd_pid.kp = PID_SPEED_KP;
+    TuningParams.spd_pid.ki = PID_SPEED_KI;
+    TuningParams.spd_pid.kd = PID_SPEED_KD;
+    TuningParams.pos_pid.kp = PID_POS_KP;
+    TuningParams.pos_pid.ki = PID_POS_KI;
+    TuningParams.pos_pid.kd = PID_POS_KD;
 
     /* Capture current encoder position as position 0 */
     HAL_TIM_Encoder_Start(&htim3, TIM_CHANNEL_ALL);
@@ -371,7 +356,7 @@ bool MotorCtrl_IsAtPosition(void)
     /* Like IsAtTarget but without the velocity gate.
        When ZVD is bypassed (homing, no rod) only a short settle is needed.
        When ZVD is active the full tail (T3+10 ticks) must flush first.    */
-    uint16_t need = s_zvd_bypass ? 5u : (uint16_t)(ZVD_T3_STEPS + 10u);
+    uint16_t need = TuningParams.zvd.bypass ? 5u : (uint16_t)(ZVD_T3_STEPS + 10u);
     return s_sc.done
         && s_settle_ticks >= need
         && fabsf(s_kalman.x[0] - s_sc.target) < POSITION_DEADBAND_RAD;
@@ -393,7 +378,7 @@ void MotorCtrl_SyncTrajectory(void)
     s_spd_integral = 0.0f;
     s_vel_sp       = 0.0f;
     s_acc_sp       = 0.0f;
-    s_zvd_bypass   = true;
+    TuningParams.zvd.bypass   = true;
     for (uint8_t i = 0; i < ZVD_BUF_SIZE; i++) s_zvd_buf[i] = pos;
 }
 
@@ -422,7 +407,7 @@ void MotorCtrl_Zero(float home_offset_rad)
     s_running      = false;
 
     /* Re-enable ZVD and pre-fill buffer — rod will be attached for normal moves */
-    s_zvd_bypass = false;
+    TuningParams.zvd.bypass = false;
     for (uint8_t i = 0; i < ZVD_BUF_SIZE; i++) s_zvd_buf[i] = home_offset_rad;
 }
 
@@ -432,7 +417,7 @@ void MotorCtrl_Zero(float home_offset_rad)
 void MotorCtrl_Tick1kHz(void)
 {
     /* E-stop guard */
-    if (g_robot.sensors.estop) {
+    if (RobotState.sensors.estop) {
         s_vel_sp = 0.0f;
         s_acc_sp = 0.0f;
         s_spd_integral = 0.0f;
@@ -458,7 +443,7 @@ void MotorCtrl_Tick1kHz(void)
     /* --- Boundary guard (Guard 2) — always active, no enable flag ---------- */
     if (s_pos_counts >  CABLE_MAX_COUNTS || s_pos_counts < -CABLE_MAX_COUNTS) {
         safety_trip(0x41u);
-        g_robot.dbg.safety.tripped_boundary = true;
+        RobotState.dbg.safety.tripped_boundary = true;
         return;
     }
 
@@ -466,11 +451,11 @@ void MotorCtrl_Tick1kHz(void)
     float pos_rad = (float)s_pos_counts * COUNTS_TO_RAD;
     Kalman_Update(&s_kalman, pos_rad);
 
-    /* --- 3. Update g_robot.motion ---------------------------------------- */
-    g_robot.motion.position_counts = s_pos_counts;
-    g_robot.motion.current_pos_deg = (float)s_pos_counts * (360.0f / (float)ENCODER_CPR);
-    g_robot.motion.velocity_rps    = s_kalman.x[1] / (2.0f * M_PI);
-    g_robot.motion.accel_rps2      = s_kalman.x[2] / (2.0f * M_PI);
+    /* --- 3. Update RobotState.motion ---------------------------------------- */
+    RobotState.motion.position_counts = s_pos_counts;
+    RobotState.motion.current_pos_deg = (float)s_pos_counts * (360.0f / (float)ENCODER_CPR);
+    RobotState.motion.velocity_rps    = s_kalman.x[1] / (2.0f * M_PI);
+    RobotState.motion.accel_rps2      = s_kalman.x[2] / (2.0f * M_PI);
 
     /* --- 4a. Auto-tune VELOCITY relay (inner loop, AT_LOOP_VELOCITY) ------- *
      * Intercepts here — after Kalman, before normal PID.  E-stop guard above *
@@ -524,7 +509,7 @@ void MotorCtrl_Tick1kHz(void)
             int16_t pwm = (int16_t)lroundf((float)s_at_sign * s_at_amp);
             if (pwm >  (int16_t)MOTOR_PWM_MAX) pwm =  (int16_t)MOTOR_PWM_MAX;
             if (pwm < -(int16_t)MOTOR_PWM_MAX) pwm = -(int16_t)MOTOR_PWM_MAX;
-            g_robot.motion.motor_pwm = pwm;
+            RobotState.motion.motor_pwm = pwm;
             Motor_SetPWM(pwm);
             return;
         }
@@ -555,12 +540,12 @@ void MotorCtrl_Tick1kHz(void)
     float vel_err    = s_vel_sp - vel_actual;
 
     /* Conditional integration — pause when speed is already saturated       */
-    float u_ff = FF_VELOCITY * s_vel_sp + FF_ACCEL * s_acc_sp;
+    float u_ff = TuningParams.ff.velocity * s_vel_sp + TuningParams.ff.accel * s_acc_sp;
     if (!s_homing_mode) {
         if (s_vel_sp > 0.01f) {
-            u_ff += FF_DISTURBANCE;
+            u_ff += TuningParams.ff.disturbance;
         } else if (s_vel_sp < -0.01f) {
-            u_ff -= FF_DISTURBANCE;
+            u_ff -= TuningParams.ff.disturbance;
         }
     }
     if (fabsf(u_ff) < (float)MOTOR_PWM_MAX - 1.0f) {
@@ -573,9 +558,9 @@ void MotorCtrl_Tick1kHz(void)
     float der = (vel_err - s_spd_prev_err) / DT_INNER;
     s_spd_prev_err = vel_err;
 
-    float u = s_pid_spd_kp * vel_err          /* live-adjustable gains       */
-            + s_pid_spd_ki * s_spd_integral
-            + s_pid_spd_kd * der
+    float u = TuningParams.spd_pid.kp * vel_err          /* live-adjustable gains       */
+            + TuningParams.spd_pid.ki * s_spd_integral
+            + TuningParams.spd_pid.kd * der
             + u_ff;
 
     /* Clamp and apply — round (not truncate) so sub-1 values reach motor */
@@ -584,9 +569,9 @@ void MotorCtrl_Tick1kHz(void)
 
     int16_t pwm = (int16_t)lroundf(u);
 
-    /* Dead-zone compensation is now handled by Coulomb friction feedforward (FF_DISTURBANCE). */
+    /* Dead-zone compensation is now handled by Coulomb friction feedforward (TuningParams.ff.disturbance). */
 
-    g_robot.motion.motor_pwm = pwm;
+    RobotState.motion.motor_pwm = pwm;
     Motor_SetPWM(pwm);
 
     /* --- Software Safety Stack ------------------------------------------- */
@@ -594,11 +579,11 @@ void MotorCtrl_Tick1kHz(void)
     /* Guard 1: Encoder health — detect broken/disconnected encoder cable.
        If the motor is being driven (|PWM| > threshold) but the encoder shows
        no movement for SAFETY_ENC_STALL_MS consecutive ticks → fault 0x40.   */
-    if (g_robot.dbg.safety.en_encoder_health) {
+    if (RobotState.dbg.safety.en_encoder_health) {
         if ((pwm > SAFETY_ENC_STALL_PWM || pwm < -SAFETY_ENC_STALL_PWM) && delta == 0) {
             if (++s_enc_stall_cnt >= SAFETY_ENC_STALL_MS) {
                 safety_trip(0x40u);
-                g_robot.dbg.safety.tripped_encoder = true;
+                RobotState.dbg.safety.tripped_encoder = true;
                 s_enc_stall_cnt = 0;
             }
         } else {
@@ -610,11 +595,11 @@ void MotorCtrl_Tick1kHz(void)
 
     /* Guard 3: Persistent current fuse — overcurrent jam / stall detection.
        100 ms persistence filters WCS1800 sensor noise and motion transients. */
-    if (g_robot.dbg.safety.en_current_safety) {
-        if (g_robot.sensors.current_amps > CURRENT_FAULT_AMPS) {
+    if (RobotState.dbg.safety.en_current_safety) {
+        if (RobotState.sensors.current_amps > CURRENT_FAULT_AMPS) {
             if (++s_overcurrent_cnt >= SAFETY_CURRENT_MS) {
                 safety_trip(0x42u);
-                g_robot.dbg.safety.tripped_current = true;
+                RobotState.dbg.safety.tripped_current = true;
                 s_overcurrent_cnt = 0;
             }
         } else {
@@ -628,12 +613,12 @@ void MotorCtrl_Tick1kHz(void)
        Gate on s_sc.done: during cruise the cascade lag can exceed 100°, so
        checking mid-move would false-trip.  After the S-curve finishes the arm
        must settle within SAFETY_TRACKING_DEG in SAFETY_TRACKING_MS ticks.   */
-    if (g_robot.dbg.safety.en_tracking_safety && !s_homing_mode && s_sc.done) {
+    if (RobotState.dbg.safety.en_tracking_safety && !s_homing_mode && s_sc.done) {
         float err_rad = fabsf(s_sc.target - s_kalman.x[0]);
         if (err_rad > SAFETY_TRACKING_DEG * (M_PI / 180.0f)) {
             if (++s_tracking_err_cnt >= SAFETY_TRACKING_MS) {
                 safety_trip(0x43u);
-                g_robot.dbg.safety.tripped_tracking = true;
+                RobotState.dbg.safety.tripped_tracking = true;
                 s_tracking_err_cnt = 0;
             }
         } else {
@@ -719,11 +704,8 @@ void MotorCtrl_Tick100Hz(void)
         /* Fall through to normal path — s_running will gate correctly      */
     }
 
-    /* Live-expression toggle: g_robot.dbg.zvd_bypass can be written from the
-       STM32CubeIDE debugger without recompiling.  Guarded during jog step
-       mode so JogStepEngage's s_zvd_bypass=true is not overwritten every tick
-       (which would re-engage ZVD and add 80 ms latency to every jog step).   */
-    if (!s_jog_step) s_zvd_bypass = g_robot.dbg.zvd_bypass;
+    /* TuningParams.zvd.bypass is used directly; no override needed.
+       JogStepEngage sets it directly.   */
 
     if (!s_running) goto send_telemetry;
 
@@ -770,7 +752,7 @@ void MotorCtrl_Tick100Hz(void)
     s_zvd_buf[s_zvd_head] = s_sc.pos;
 
     float shaped;
-    if (s_zvd_bypass) {
+    if (TuningParams.zvd.bypass) {
         shaped = s_sc.pos;   /* no rod attached — pass S-curve output directly */
     } else {
         uint8_t idx_t2 = (s_zvd_head + ZVD_BUF_SIZE - ZVD_T2_STEPS) % ZVD_BUF_SIZE;
@@ -819,7 +801,7 @@ void MotorCtrl_Tick100Hz(void)
     /* Anti-stiction boost: if S-Curve is done but we are stuck outside the deadband,
        the normal Ki=0.02 takes 10s to build up enough PWM to break static friction.
        Boost Ki dynamically when velocity is near zero to settle quickly. */
-    float dynamic_ki = s_pid_pos_ki;
+    float dynamic_ki = TuningParams.pos_pid.ki;
     if (s_sc.done && fabsf(s_kalman.x[1]) < VELOCITY_SETTLED_RADS) {
         dynamic_ki *= 25.0f; /* Winds up in ~400ms instead of 10s */
     }
@@ -831,13 +813,13 @@ void MotorCtrl_Tick100Hz(void)
     float d_meas = -(pos_actual - s_pos_prev_meas) * (float)OUTER_LOOP_HZ;
     s_pos_prev_meas = pos_actual;
 
-    float vel_cmd = s_pid_pos_kp * pos_err          /* live-adjustable gains */
+    float vel_cmd = TuningParams.pos_pid.kp * pos_err          /* live-adjustable gains */
                   + dynamic_ki * s_pos_integral
-                  + s_pid_pos_kd * d_meas;
+                  + TuningParams.pos_pid.kd * d_meas;
 
     /* Clamp velocity command to ±Vmax */
-    if (vel_cmd >  SCURVE_VMAX_RADS) vel_cmd =  SCURVE_VMAX_RADS;
-    if (vel_cmd < -SCURVE_VMAX_RADS) vel_cmd = -SCURVE_VMAX_RADS;
+    if (vel_cmd >  TuningParams.scurve.vmax_rads) vel_cmd =  TuningParams.scurve.vmax_rads;
+    if (vel_cmd < -TuningParams.scurve.vmax_rads) vel_cmd = -TuningParams.scurve.vmax_rads;
 
     /* Pass to inner loop — volatile write is atomic enough for float on M4  */
     s_vel_sp = vel_cmd;
@@ -855,9 +837,9 @@ send_telemetry:
         int16_t pos_x10 = (int16_t)lroundf(s_kalman.x[0] * (180.0f / M_PI) * 10.0f);
         int16_t vel_x10 = (int16_t)lroundf(s_kalman.x[1] * 10.0f);
         int16_t acc_x10 = (int16_t)lroundf(s_kalman.x[2] * 10.0f);
-        int16_t co_x10  = (int16_t)(g_robot.motion.motor_pwm * 10);
+        int16_t co_x10  = (int16_t)(RobotState.motion.motor_pwm * 10);
         if (!UartDma_SendTelemetry_T(HAL_GetTick(), pos_x10, vel_x10, acc_x10, co_x10)) {
-            g_robot.comms.telemetry_drops++;
+            RobotState.comms.telemetry_drops++;
         }
 
         /* 2. Send detailed $CTRL debug telemetry for the tuning dashboard */
@@ -870,7 +852,7 @@ send_telemetry:
         int16_t vel_sp_x10  = (int16_t)lroundf(s_vel_sp * (180.0f / M_PI) * 10.0f);
         int16_t kal_vel_x10 = (int16_t)lroundf(s_kalman.x[1] * (180.0f / M_PI) * 10.0f);
         int16_t vel_err_x10 = (int16_t)lroundf((s_vel_sp - s_kalman.x[1]) * (180.0f / M_PI) * 10.0f);
-        int16_t pwm_x10     = (int16_t)(g_robot.motion.motor_pwm * 10);
+        int16_t pwm_x10     = (int16_t)(RobotState.motion.motor_pwm * 10);
         int16_t pos_int_x10 = (int16_t)lroundf(s_pos_integral * (180.0f / M_PI) * 10.0f);
         int16_t spd_int_x10 = (int16_t)lroundf(s_spd_integral * 10.0f);
 
@@ -886,7 +868,7 @@ send_telemetry:
 
 void MotorCtrl_SetZvdBypass(bool bypass)
 {
-    s_zvd_bypass = bypass;
+    TuningParams.zvd.bypass = bypass;
 }
 
 /* ==========================================================================
@@ -907,8 +889,8 @@ void MotorCtrl_SetZvdBypass(bool bypass)
 void MotorCtrl_JogVelocity(float vel_rads)
 {
     /* Clamp to Vmax so the operator cannot command beyond the S-curve ceiling */
-    if (vel_rads >  SCURVE_VMAX_RADS) { vel_rads =  SCURVE_VMAX_RADS; }
-    if (vel_rads < -SCURVE_VMAX_RADS) { vel_rads = -SCURVE_VMAX_RADS; }
+    if (vel_rads >  TuningParams.scurve.vmax_rads) { vel_rads =  TuningParams.scurve.vmax_rads; }
+    if (vel_rads < -TuningParams.scurve.vmax_rads) { vel_rads = -TuningParams.scurve.vmax_rads; }
 
     s_running = true;   /* always: re-enable if Stop() was called mid-jog */
     if (!s_jog_active) {
@@ -1002,8 +984,8 @@ void MotorCtrl_JogStepEngage(void)
         for (i = 0u; i < ZVD_BUF_SIZE; i++) { s_zvd_buf[i] = pos; }
     }
 
-    s_jog_step   = true;   /* guards s_zvd_bypass from live-toggle override   */
-    s_zvd_bypass = true;
+    s_jog_step   = true;   /* guards TuningParams.zvd.bypass from live-toggle override   */
+    TuningParams.zvd.bypass = true;
 
     /* Seed S-curve from current state so the first SetTarget() starts clean  */
     {
@@ -1032,7 +1014,7 @@ void MotorCtrl_JogStepDisengage(void)
         uint8_t i;
         for (i = 0u; i < ZVD_BUF_SIZE; i++) { s_zvd_buf[i] = pos; }
     }
-    s_zvd_bypass = false;
+    TuningParams.zvd.bypass = false;
 
     s_pos_integral = 0.0f;
     s_spd_integral = 0.0f;

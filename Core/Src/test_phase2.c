@@ -13,14 +13,14 @@
 /* =========================================================================
    Phase 2 test — uart_dma_manager: TX ring buffer, RX idle DMA, T3.5
 
-   Live Expressions: add  g_robot  and expand g_robot.comms
+   Live Expressions: add  RobotState  and expand RobotState.comms
 
    What to observe
    ---------------
-   g_robot.comms.tx_used        : rises as telemetry is queued, falls as DMA drains it
-   g_robot.comms.t35_active     : briefly true after each fake Modbus reply is sent
-   g_robot.comms.telemetry_drops: increments when telemetry is blocked (T3.5 or watermark)
-   g_robot.comms.last_rx_len    : length of last packet received on LPUART1
+   RobotState.comms.tx_used        : rises as telemetry is queued, falls as DMA drains it
+   RobotState.comms.t35_active     : briefly true after each fake Modbus reply is sent
+   RobotState.comms.telemetry_drops: increments when telemetry is blocked (T3.5 or watermark)
+   RobotState.comms.last_rx_len    : length of last packet received on LPUART1
 
    Hardware test
    -------------
@@ -41,7 +41,7 @@ static const uint8_t k_fake_modbus[] = {
 
 static void on_lpuart_rx(const uint8_t *data, uint16_t len)
 {
-    g_robot.comms.last_rx_len = len;
+    RobotState.comms.last_rx_len = len;
     /* Phase 4 (modbus_bridge) will process the payload — nothing else needed here */
 }
 
@@ -67,12 +67,12 @@ void TestPhase2_Run(void)
         char buf[64];
         snprintf(buf, sizeof(buf), "$TELEM,%05lu,%.2f,%.2f,%.2f\r\n",
                  counter++,
-                 (double)g_robot.motion.velocity_rps,
-                 (double)g_robot.motion.accel_rps2,
-                 (double)g_robot.sensors.current_amps);
+                 (double)RobotState.motion.velocity_rps,
+                 (double)RobotState.motion.accel_rps2,
+                 (double)RobotState.sensors.current_amps);
 
         if (!UartDma_SendTelemetry(buf)) {
-            g_robot.comms.telemetry_drops++;
+            RobotState.comms.telemetry_drops++;
         }
     }
 
@@ -82,9 +82,9 @@ void TestPhase2_Run(void)
         UartDma_SendModbus(k_fake_modbus, sizeof(k_fake_modbus));
     }
 
-    /* Update g_robot.comms so Live Expressions reflects current state */
-    g_robot.comms.tx_used    = UartDma_GetTxUsed();
-    g_robot.comms.t35_active = UartDma_IsT35Active();
+    /* Update RobotState.comms so Live Expressions reflects current state */
+    RobotState.comms.tx_used    = UartDma_GetTxUsed();
+    RobotState.comms.t35_active = UartDma_IsT35Active();
 
     /* Keep TX moving (re-kicks after T3.5 expires) */
     UartDma_Process();

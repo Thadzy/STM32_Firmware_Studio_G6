@@ -10,6 +10,7 @@
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 extern TIM_HandleTypeDef htim6;
 
@@ -112,7 +113,16 @@ static float s_jog_target_rad  = 0.0f;
 
 /* Auto sequence state */
 static uint8_t  s_seq_pairs;            /* number of pick+place pairs (max 8)    */
-static int16_t  s_seq_slots[16];        /* registers 0x12–0x21 = 16 slots = 8 pairs */
+static int16_t  s_seq_slots[16];
+
+/* Test Mode state */
+static uint16_t s_test_type;
+static uint16_t s_test_repeats_target;
+static uint16_t s_test_repeats_done;
+static int16_t  s_test_pos_a;
+static int16_t  s_test_pos_b;
+static bool     s_test_moving_to_b;
+static uint32_t s_test_dwell_start;        /* registers 0x12–0x21 = 16 slots = 8 pairs */
 static uint8_t  s_seq_step;    /* current step index (0 = pick of pair 0)   */
 static bool     s_gripper_en;  /* gripper enabled in auto (reg 0x04)        */
 
@@ -283,8 +293,8 @@ static void homing_run(void)
                 s_sweep_amp_rad  += deg_to_rad(HOMING_WIGGLE_STEP_DEG);
 
                 if (s_sweep_amp_rad > deg_to_rad(HOMING_WIGGLE_MAX_DEG)) {
-                    g_robot.fsm              = STATE_FAULT;
-                    g_robot.comms.fault_code = 4u; /* sensor not found in sweep */
+                    RobotState.fsm              = STATE_FAULT;
+                    RobotState.comms.fault_code = 4u; /* sensor not found in sweep */
                     MotorCtrl_Stop();
                     break;
                 }
@@ -312,8 +322,8 @@ static void homing_run(void)
         if (HwIo_GetProximity()) {
             s_backoff_start_rad = pos;        /* still inside — keep arming  */
             if (fabsf(pos - s_sweep_start_rad) > deg_to_rad(HOMING_BACKOFF_MAX_DEG)) {
-                g_robot.fsm              = STATE_FAULT;
-                g_robot.comms.fault_code = 3u; /* sensor never cleared       */
+                RobotState.fsm              = STATE_FAULT;
+                RobotState.comms.fault_code = 3u; /* sensor never cleared       */
                 MotorCtrl_Stop();
             }
         } else if (fabsf(pos - s_backoff_start_rad) >= deg_to_rad(HOMING_BACKOFF_DEG)) {
@@ -335,8 +345,8 @@ static void homing_run(void)
             hom_dbg("EA1", rad_to_deg(pos), rad_to_deg(s_sweep_amp_rad), rad_to_deg(pos));
             s_hom = HOM_PREC_OVERSHOOT;
         } else if (fabsf(pos - s_search_start_rad) > deg_to_rad(HOMING_MAX_SEARCH_DEG)) {
-            g_robot.fsm              = STATE_FAULT;
-            g_robot.comms.fault_code = 2u;     /* edge A not found            */
+            RobotState.fsm              = STATE_FAULT;
+            RobotState.comms.fault_code = 2u;     /* edge A not found            */
             MotorCtrl_Stop();
         }
         break;
@@ -359,8 +369,8 @@ static void homing_run(void)
                 s_hom = HOM_FIND_EDGE_B;
             } else if (past > deg_to_rad(HOMING_OVERSHOOT_MAX_DEG)) {
                 /* Sensor never went OFF — zone too wide or sensor stuck ON   */
-                g_robot.fsm              = STATE_FAULT;
-                g_robot.comms.fault_code = 3u;
+                RobotState.fsm              = STATE_FAULT;
+                RobotState.comms.fault_code = 3u;
                 MotorCtrl_Stop();
             }
         }
@@ -381,8 +391,8 @@ static void homing_run(void)
             s_hom = HOM_GO_CENTER;
         } else if (fabsf(pos - s_search_start_rad) > deg_to_rad(HOMING_MAX_SEARCH_DEG)) {
             /* Safety: edge B not found within search range — fault        */
-            g_robot.fsm              = STATE_FAULT;
-            g_robot.comms.fault_code = 2u;
+            RobotState.fsm              = STATE_FAULT;
+            RobotState.comms.fault_code = 2u;
             MotorCtrl_Stop();
         }
         break;
@@ -430,7 +440,7 @@ static void homing_run(void)
         }
         s_hom           = HOM_IDLE;
         s_move_start_ms = HAL_GetTick();
-        g_robot.fsm     = STATE_RUNNING;
+        RobotState.fsm     = STATE_RUNNING;
         s_run_mode      = RUN_POINT;
         set_task(0x0008);   /* GoPoint — drive to park position */
         break;
@@ -450,7 +460,7 @@ static void auto_run(void)
     if (s_seq_pairs == 0 || s_seq_step > s_seq_pairs * 2u || s_seq_step > 16u) {
         snprintf(s_dbg, sizeof(s_dbg), "$AUTO,DONE,%u\r\n", s_seq_step);
         UartDma_SendTelemetry(s_dbg);
-        g_robot.fsm         = STATE_IDLE;
+        RobotState.fsm         = STATE_IDLE;
         s_run_mode          = RUN_IDLE;
         s_gripper_triggered = false;
         set_task(0x0000);
@@ -544,7 +554,7 @@ static void handle_joystick(void)
         /* Mode switched away — release joystick velocity jog cleanly.
            Guard: do NOT cancel during STATE_RUNNING (PC discrete jog owns
            s_jog_vel_active in that state and calls JogRelease itself).        */
-        if (g_robot.fsm != STATE_RUNNING) {
+        if (RobotState.fsm != STATE_RUNNING) {
 #ifdef JOG_OPTION_1
             if (s_jog_vel_active)  { MotorCtrl_JogRelease();       s_jog_vel_active  = false; }
 #else
@@ -573,10 +583,10 @@ static void handle_joystick(void)
 #else
         if (s_jog_step_active) { MotorCtrl_JogStepDisengage(); s_jog_step_active = false; }
 #endif
-        if (g_robot.fsm != STATE_FAULT) {
+        if (RobotState.fsm != STATE_FAULT) {
             MotorCtrl_Stop();
-            g_robot.fsm              = STATE_FAULT;
-            g_robot.comms.fault_code = 0x10u;
+            RobotState.fsm              = STATE_FAULT;
+            RobotState.comms.fault_code = 0x10u;
             s_run_mode               = RUN_IDLE;
             set_task(0x0000);
         }
@@ -589,7 +599,7 @@ static void handle_joystick(void)
     if (joy.base == 'L' || joy.base == 'R') {
         /* FSM must be IDLE and gripper quiet.  Do not enter during homing,
            fault, or running — those states own the motor.                   */
-        if (g_robot.fsm != STATE_IDLE) { return; }
+        if (RobotState.fsm != STATE_IDLE) { return; }
         if (s_grip != GRIP_IDLE)       { return; }
 
         /* JOY_JOG_VEL_RADS is the continuous speed while the key is held.
@@ -610,7 +620,7 @@ static void handle_joystick(void)
     }
 
     /* Non-jog buttons — only accepted in IDLE with gripper stopped          */
-    if (g_robot.fsm != STATE_IDLE) { return; }
+    if (RobotState.fsm != STATE_IDLE) { return; }
     if (s_grip != GRIP_IDLE)       { return; }
 
     switch (joy.base) {
@@ -619,7 +629,7 @@ static void handle_joystick(void)
     case 'U':  Gripper_SetVertical(true); break;  /* Manual arm up            */
     case 'D':  Gripper_SetVertical(false);break;  /* Manual arm down          */
     case 'Y':
-        g_robot.fsm = STATE_HOMING;
+        RobotState.fsm = STATE_HOMING;
         s_hom       = HOM_INIT;
         set_task(0x0001);
         Joystick_SendAudio('h');
@@ -639,7 +649,7 @@ static void handle_joystick(void)
     }
 
     /* All commands only accepted in IDLE with gripper stopped               */
-    if (g_robot.fsm != STATE_IDLE) { return; }
+    if (RobotState.fsm != STATE_IDLE) { return; }
     if (s_grip != GRIP_IDLE)       { return; }
 
     switch (joy.base) {
@@ -659,7 +669,7 @@ static void handle_joystick(void)
         MotorCtrl_SetTarget(MotorCtrl_GetPosition_rad() + step);
         set_task(0x0008);
         s_move_start_ms = HAL_GetTick();
-        g_robot.fsm     = STATE_RUNNING;
+        RobotState.fsm     = STATE_RUNNING;
         s_run_mode      = RUN_JOG;
         break;
     }
@@ -668,7 +678,7 @@ static void handle_joystick(void)
     case 'U':  Gripper_SetVertical(true);  break;
     case 'D':  Gripper_SetVertical(false); break;
     case 'Y':
-        g_robot.fsm = STATE_HOMING;
+        RobotState.fsm = STATE_HOMING;
         s_hom       = HOM_INIT;
         set_task(0x0001);
         Joystick_SendAudio('h');
@@ -685,26 +695,26 @@ static void handle_joystick(void)
 static void fsm_run(void)
 {
     /* E-stop: NO switch to VCC, PULLDOWN — safe to enable, no false-triggers */
-    if (g_robot.sensors.estop && g_robot.fsm != STATE_FAULT) {
-        g_robot.fsm              = STATE_FAULT;
-        g_robot.comms.fault_code = 0x01u;
+    if (RobotState.sensors.estop && RobotState.fsm != STATE_FAULT) {
+        RobotState.fsm              = STATE_FAULT;
+        RobotState.comms.fault_code = 0x01u;
         MotorCtrl_Stop();
         set_task(0x0000);
     }
 
     uint16_t mode_reg = ModbusBridge_GetReg(0x01);
 
-    switch (g_robot.fsm) {
+    switch (RobotState.fsm) {
 
     case STATE_INIT:
-        g_robot.fsm = STATE_IDLE;
+        RobotState.fsm = STATE_IDLE;
         break;
 
     case STATE_IDLE:
         set_task(0x0000);
         if (mode_reg & 0x01u) {                         /* Home             */
             ModbusBridge_SetReg(0x01, 0);
-            g_robot.fsm = STATE_HOMING;
+            RobotState.fsm = STATE_HOMING;
             s_hom       = HOM_INIT;
             set_task(0x0001);
             s_hb_last_tick = HAL_GetTick(); /* HOME write proves PC alive — reset HB timer */
@@ -736,7 +746,7 @@ static void fsm_run(void)
 
                 set_task(0x0008);           /* GoPoint                           */
                 s_move_start_ms = HAL_GetTick();
-                g_robot.fsm = STATE_RUNNING;
+                RobotState.fsm = STATE_RUNNING;
                 s_run_mode  = RUN_JOG;
             }
         } else if (mode_reg & 0x04u) {                  /* Auto             */
@@ -752,7 +762,7 @@ static void fsm_run(void)
                 }
                 s_seq_step          = 0;
                 s_gripper_triggered = false;
-                g_robot.fsm = STATE_RUNNING;
+                RobotState.fsm = STATE_RUNNING;
                 s_run_mode  = RUN_AUTO;
             }
 
@@ -764,8 +774,30 @@ static void fsm_run(void)
             MotorCtrl_Zero(0.0f);
             MotorCtrl_SetTarget(0.0f);
             s_user_home_rad = 0.0f;
-        } else if (mode_reg & 0x10u) {                  /* Test — reserved  */
+        } else if (mode_reg & 0x10u) {                  /* Test  */
             ModbusBridge_SetReg(0x01, 0);
+            s_test_type           = ModbusBridge_GetReg(0x06);
+            s_test_pos_a          = (int16_t)ModbusBridge_GetReg(0x09);
+            s_test_pos_b          = (int16_t)ModbusBridge_GetReg(0x10);
+            s_test_repeats_target = ModbusBridge_GetReg(0x11);
+            s_test_repeats_done   = 0;
+            s_test_moving_to_b    = true;
+            s_test_dwell_start    = 0;
+
+            if (s_test_type == 1) { /* Performance */
+                int16_t raw_v = (int16_t)ModbusBridge_GetReg(0x07);
+                int16_t raw_a = (int16_t)ModbusBridge_GetReg(0x08);
+                if (raw_v > 0) TuningParams.scurve.vmax_rads = (float)raw_v;
+                if (raw_a > 0) TuningParams.scurve.amax_rads2 = (float)raw_a;
+            }
+
+            uint16_t unit = ModbusBridge_GetReg(0x23);
+            MotorCtrl_SetTarget(resolve_target(s_test_pos_b, unit));
+            
+            set_task(0x0008); /* GoPoint */
+            s_move_start_ms = HAL_GetTick();
+            RobotState.fsm = STATE_RUNNING;
+            s_run_mode  = RUN_TEST;
         }
 
         /* Soft stop clears running state */
@@ -782,7 +814,7 @@ static void fsm_run(void)
                 MotorCtrl_SetTarget(resolve_target(p2p_tgt, p2p_unit));
                 set_task(0x0008); /* GoPoint */
                 s_move_start_ms = HAL_GetTick();
-                g_robot.fsm = STATE_RUNNING;
+                RobotState.fsm = STATE_RUNNING;
                 s_run_mode  = RUN_POINT;
             }
         }
@@ -806,9 +838,13 @@ static void fsm_run(void)
         /* Soft stop */
         if (ModbusBridge_GetReg(0x25) & 0x01u) {
             MotorCtrl_Stop();
-            g_robot.fsm = STATE_IDLE;
+            RobotState.fsm = STATE_IDLE;
             s_run_mode  = RUN_IDLE;
             ModbusBridge_SetReg(0x22, 0); /* Clear auto sequence state */
+            
+            /* Restore TuningParams if interrupted during Performance Test */
+            TuningParams.scurve.vmax_rads = SCURVE_VMAX_RADS;
+            TuningParams.scurve.amax_rads2 = SCURVE_AMAX_RADS2;
             break;
         }
         switch (s_run_mode) {
@@ -821,13 +857,13 @@ static void fsm_run(void)
             if (fabsf(err) <= POSITION_DEADBAND_RAD) {
                 MotorCtrl_JogRelease();
                 s_jog_vel_active = false;
-                g_robot.fsm = STATE_IDLE;
+                RobotState.fsm = STATE_IDLE;
                 s_run_mode  = RUN_IDLE;
                 set_task(0x0000);
             } else if ((HAL_GetTick() - s_move_start_ms) >= MOVE_TIMEOUT_MS) {
                 MotorCtrl_JogRelease();
                 s_jog_vel_active = false;
-                g_robot.fsm = STATE_IDLE;
+                RobotState.fsm = STATE_IDLE;
                 s_run_mode  = RUN_IDLE;
                 set_task(0x0000);
             } else {
@@ -838,34 +874,77 @@ static void fsm_run(void)
         }
         case RUN_POINT:
             if (MotorCtrl_IsAtTarget()) {
-                g_robot.fsm = STATE_IDLE;
+                RobotState.fsm = STATE_IDLE;
                 s_run_mode  = RUN_IDLE;
                 set_task(0x0000);
             } else if ((HAL_GetTick() - s_move_start_ms) >= MOVE_TIMEOUT_MS) {
                 MotorCtrl_Stop();
-                g_robot.fsm = STATE_IDLE;
+                RobotState.fsm = STATE_IDLE;
                 s_run_mode  = RUN_IDLE;
                 set_task(0x0000);
+            }
+            break;
+
+        case RUN_TEST:
+            if (MotorCtrl_IsAtTarget()) {
+                if (s_test_dwell_start == 0) {
+                    s_test_dwell_start = HAL_GetTick();
+                } else if ((HAL_GetTick() - s_test_dwell_start) >= 250u) { /* 250ms dwell */
+                    s_test_dwell_start = 0;
+                    
+                    if (s_test_moving_to_b) {
+                        s_test_moving_to_b = false;
+                        MotorCtrl_SetTarget(resolve_target(s_test_pos_a, ModbusBridge_GetReg(0x23)));
+                        s_move_start_ms = HAL_GetTick();
+                    } else {
+                        s_test_moving_to_b = true;
+                        s_test_repeats_done++;
+                        /* 65000 treated as infinite */
+                        if (s_test_repeats_target < 65000u && s_test_repeats_done >= s_test_repeats_target) {
+                            RobotState.fsm = STATE_IDLE;
+                            s_run_mode  = RUN_IDLE;
+                            set_task(0x0000);
+                            
+                            if (s_test_type == 1) { /* Restore defaults */
+                                TuningParams.scurve.vmax_rads = SCURVE_VMAX_RADS;
+                                TuningParams.scurve.amax_rads2 = SCURVE_AMAX_RADS2;
+                            }
+                            break;
+                        }
+                        MotorCtrl_SetTarget(resolve_target(s_test_pos_b, ModbusBridge_GetReg(0x23)));
+                        s_move_start_ms = HAL_GetTick();
+                    }
+                }
+            } else if ((HAL_GetTick() - s_move_start_ms) >= MOVE_TIMEOUT_MS) {
+                MotorCtrl_Stop();
+                RobotState.fsm = STATE_IDLE;
+                s_run_mode  = RUN_IDLE;
+                set_task(0x0000);
+                
+                if (s_test_type == 1) {
+                    TuningParams.scurve.vmax_rads = SCURVE_VMAX_RADS;
+                    TuningParams.scurve.amax_rads2 = SCURVE_AMAX_RADS2;
+                }
             }
             break;
         case RUN_AUTO:
             auto_run();
             break;
         default:
-            g_robot.fsm = STATE_IDLE;
+            RobotState.fsm = STATE_IDLE;
             break;
         }
         break;
 
     case STATE_FAULT:
         /* Latch — clear only if E-stop released AND reset button pressed    */
-        if (!g_robot.sensors.estop && HwIo_GetResetBtn()) {
-            g_robot.fsm                          = STATE_IDLE;
-            g_robot.comms.fault_code             = 0u;
-            g_robot.dbg.safety.tripped_encoder   = false;
-            g_robot.dbg.safety.tripped_boundary  = false;
-            g_robot.dbg.safety.tripped_current   = false;
-            g_robot.dbg.safety.tripped_tracking  = false;
+        if (!RobotState.sensors.estop && HwIo_GetResetBtn()) {
+            RobotState.fsm                          = STATE_IDLE;
+            RobotState.comms.fault_code             = 0u;
+            RobotState.dbg.safety.tripped_encoder   = false;
+            RobotState.dbg.safety.tripped_boundary  = false;
+            RobotState.dbg.safety.tripped_current   = false;
+            RobotState.dbg.safety.tripped_tracking  = false;
         }
         break;
     }
@@ -883,10 +962,9 @@ void App_Init(void)
     MotorCtrl_Init();
     ModbusBridge_Init();
     Motor_Enable();
-    MotorCtrl_SetZvdBypass(true);   /* ZVD disabled — re-enable after tuning */
-    g_robot.dbg.zvd_bypass = true;  /* mirror: keeps Live Expressions in sync  */
+    MotorCtrl_SetZvdBypass(false);  /* Rod is attached, ensure ZVD is enabled by default */
     HAL_TIM_Base_Start_IT(&htim6);
-    g_robot.fsm         = STATE_INIT;
+    RobotState.fsm         = STATE_INIT;
     s_hom               = HOM_IDLE;
     s_run_mode          = RUN_IDLE;
     s_grip              = GRIP_IDLE;
@@ -897,9 +975,9 @@ void App_Init(void)
     Relay_SetSysmode(s_joy_mode);
 
     /* Safety guards — all ON by default; set en_* = false via debugger to disable */
-    g_robot.dbg.safety.en_encoder_health  = false;
-    g_robot.dbg.safety.en_current_safety  = false;
-    g_robot.dbg.safety.en_tracking_safety = false;
+    RobotState.dbg.safety.en_encoder_health  = false;
+    RobotState.dbg.safety.en_current_safety  = false;
+    RobotState.dbg.safety.en_tracking_safety = false;
 
     /* Seed heartbeat tracker — gives 2 s window before timeout is enforced */
     s_hb_last_tick = HAL_GetTick();
@@ -918,27 +996,27 @@ void App_Init(void)
 
 void App_Run(void)
 {
-    /* Poll sensors into g_robot (non-ISR sensors) */
+    /* Poll sensors into RobotState (non-ISR sensors) */
     /* E-stop: NC contact on PA5 — polarity inverted in hw_io.c (HIGH=active) */
-    g_robot.sensors.estop         = HwIo_GetEStop();
-    g_robot.sensors.selected_mode = HwIo_GetSelectedMode();
-    g_robot.sensors.reset_btn     = HwIo_GetResetBtn();
-    g_robot.sensors.proximity     = HwIo_GetProximity();
+    RobotState.sensors.estop         = HwIo_GetEStop();
+    RobotState.sensors.selected_mode = HwIo_GetSelectedMode();
+    RobotState.sensors.reset_btn     = HwIo_GetResetBtn();
+    RobotState.sensors.proximity     = HwIo_GetProximity();
 
     /* Mode switch: only act when the arm is idle. Ignore during FAULT (E-stop
        transients), RUNNING (jog/auto), and HOMING — motor direction reversals
        inject PWM EMI onto PA6 that can fake a mode flip, clicking the Sysmode
        relay + pilot lamp mid-motion. Deferring until IDLE means the change
        takes effect only once motion has fully settled.                        */
-    if (g_robot.sensors.selected_mode != s_joy_mode
-        && g_robot.fsm != STATE_FAULT
-        && g_robot.fsm != STATE_RUNNING
-        && g_robot.fsm != STATE_HOMING) {
+    if (RobotState.sensors.selected_mode != s_joy_mode
+        && RobotState.fsm != STATE_FAULT
+        && RobotState.fsm != STATE_RUNNING
+        && RobotState.fsm != STATE_HOMING) {
         /* Release any active jog before switching modes so the motor stops
            cleanly and all integrals are reset regardless of which option is active */
         if (s_jog_vel_active)  { MotorCtrl_JogRelease();       s_jog_vel_active  = false; }
         if (s_jog_step_active) { MotorCtrl_JogStepDisengage(); s_jog_step_active = false; }
-        s_joy_mode = g_robot.sensors.selected_mode;
+        s_joy_mode = RobotState.sensors.selected_mode;
         Relay_SetSysmode(s_joy_mode);
         HwIo_ResetEstopDebounce();  /* discard relay-induced spike on PA5 */
         Joystick_SendAudio(s_joy_mode ? 'J' : 'S');
@@ -951,34 +1029,34 @@ void App_Run(void)
             s_hb_last_tick = HAL_GetTick();
             ModbusBridge_SetReg(0x00, HB_YA); /* Reset to YA immediately so PC/main.exe can see it and reply again */
             /* Link restored — clear the stale PC-link-lost code */
-            if (g_robot.comms.fault_code == 0x20u)
-                g_robot.comms.fault_code = 0u;
+            if (RobotState.comms.fault_code == 0x20u)
+                RobotState.comms.fault_code = 0u;
         }
         uint32_t hb_age = HAL_GetTick() - s_hb_last_tick;
-        g_robot.dbg.hb_age_ms = (hb_age > 0xFFFFu) ? 0xFFFFu : (uint16_t)hb_age;
+        RobotState.dbg.hb_age_ms = (hb_age > 0xFFFFu) ? 0xFFFFu : (uint16_t)hb_age;
         /* Do not interrupt homing — it has its own safety limits (FAULT codes 2-4).
            Stopping mid-sweep corrupts edge detection and causes 0.4°/12s creep. */
         if (hb_age >= HEARTBEAT_TIMEOUT_MS &&
-            g_robot.fsm != STATE_FAULT    &&
-            g_robot.fsm != STATE_HOMING) {
+            RobotState.fsm != STATE_FAULT    &&
+            RobotState.fsm != STATE_HOMING) {
             MotorCtrl_Stop();
-            g_robot.fsm              = STATE_IDLE;
+            RobotState.fsm              = STATE_IDLE;
             s_run_mode               = RUN_IDLE;
-            g_robot.comms.fault_code = 0x20u; /* PC Link Lost */
+            RobotState.comms.fault_code = 0x20u; /* PC Link Lost */
             set_task(0x0000);
         }
     }
 
-    /* Update debug mirror — expand g_robot in Live Expressions to see all */
+    /* Update debug mirror — expand RobotState in Live Expressions to see all */
     {
         JoyState_t _j = Joystick_GetState();
-        g_robot.dbg.run_mode = (uint8_t)s_run_mode;
-        g_robot.dbg.grip     = (uint8_t)s_grip;
-        g_robot.dbg.joy_mode = (uint8_t)s_joy_mode;
-        g_robot.dbg.joy_btn  = _j.base;
-        g_robot.dbg.joy_conn = (uint8_t)_j.connected;
-        g_robot.dbg.pos_deg  = rad_to_deg(MotorCtrl_GetPosition_rad());
-        g_robot.dbg.vel_dps  = g_robot.motion.velocity_rps * 360.0f;
+        RobotState.dbg.run_mode = (uint8_t)s_run_mode;
+        RobotState.dbg.grip     = (uint8_t)s_grip;
+        RobotState.dbg.joy_mode = (uint8_t)s_joy_mode;
+        RobotState.dbg.joy_btn  = _j.base;
+        RobotState.dbg.joy_conn = (uint8_t)_j.connected;
+        RobotState.dbg.pos_deg  = rad_to_deg(MotorCtrl_GetPosition_rad());
+        RobotState.dbg.vel_dps  = RobotState.motion.velocity_rps * 360.0f;
     }
 
     /* Drain UART RX → Modbus callbacks → register updates */
@@ -997,13 +1075,13 @@ void App_Run(void)
     fsm_run();
 
     /* Emergency pilot lamp — ON whenever robot is in FAULT */
-    Relay_SetStatus(g_robot.fsm == STATE_FAULT);
+    Relay_SetStatus(RobotState.fsm == STATE_FAULT);
 
     /* Audio feedback on FSM state transitions */
     {
         static FsmState_t s_prev_fsm = STATE_INIT;
-        if (g_robot.fsm != s_prev_fsm) {
-            switch (g_robot.fsm) {
+        if (RobotState.fsm != s_prev_fsm) {
+            switch (RobotState.fsm) {
             case STATE_HOMING: Joystick_SendAudio('h'); break; /* homing started */
             case STATE_FAULT:  Joystick_SendAudio('E'); break; /* fault          */
             case STATE_IDLE:
@@ -1011,7 +1089,7 @@ void App_Run(void)
                 break;
             default: break;
             }
-            s_prev_fsm = g_robot.fsm;
+            s_prev_fsm = RobotState.fsm;
         }
     }
 
@@ -1021,8 +1099,8 @@ void App_Run(void)
     if (now - s_tel_tick >= 2000u) {
         s_tel_tick = now;
         snprintf(s_dbg, sizeof(s_dbg), "$ST,%d,%d,%d\r\n",
-                 (int)g_robot.fsm, (int)s_run_mode,
-                 (int)g_robot.comms.fault_code);
+                 (int)RobotState.fsm, (int)s_run_mode,
+                 (int)RobotState.comms.fault_code);
         UartDma_SendTelemetry(s_dbg);
     }
 }

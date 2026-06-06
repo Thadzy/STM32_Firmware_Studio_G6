@@ -109,7 +109,7 @@ static void apply_reg_write(uint8_t addr, uint16_t val)
         /* Heartbeat reply from PC */
         if (val == HB_HI) {
             s_hb_pending         = false;
-            g_robot.comms.heartbeat = HB_HI;
+            RobotState.comms.heartbeat = HB_HI;
         }
         break;
 
@@ -232,7 +232,7 @@ static void on_rx(const uint8_t *data, uint16_t len)
     default:           send_exception(data[1], 0x01);   break;
     }
 
-    g_robot.comms.last_rx_len = len;
+    RobotState.comms.last_rx_len = len;
 }
 
 static void send_gains_telemetry(uint8_t loop)
@@ -285,10 +285,10 @@ void ModbusBridge_Tick(void)
         s_hb_tick    = now;
         s_hb_pending = false;  /* Self-healing: clear the pending latch so pings are retried if replies get dropped */
         s_regs[0x00] = HB_YA;
-        g_robot.comms.heartbeat = HB_YA;
+        RobotState.comms.heartbeat = HB_YA;
     }
 
-    /* --- Refresh read registers from g_robot ----------------------------- */
+    /* --- Refresh read registers from RobotState ----------------------------- */
     /* 0x26 — bit0=ReedUp, bit1=ReedDown, bit2=ReedClose, bit3=Proximity   */
     uint16_t reeds = 0;
     if (HwIo_GetReedSwitch(REED_UP))    reeds |= 0x01u;
@@ -301,8 +301,8 @@ void ModbusBridge_Tick(void)
 
     /* 0x28–0x30 — Position / Velocity / Acceleration in deg × 10          */
     float pos_rad  = MotorCtrl_GetPosition_rad();
-    float vel_rads = g_robot.motion.velocity_rps * (2.0f * 3.14159265f);
-    float acc_rads = g_robot.motion.accel_rps2   * (2.0f * 3.14159265f);
+    float vel_rads = RobotState.motion.velocity_rps * (2.0f * 3.14159265f);
+    float acc_rads = RobotState.motion.accel_rps2   * (2.0f * 3.14159265f);
     float pos_deg  = pos_rad * (180.0f / 3.14159265f);
 
     s_regs[0x28] = (uint16_t)(int16_t)(pos_deg  * 10.0f);
@@ -310,8 +310,8 @@ void ModbusBridge_Tick(void)
     s_regs[0x30] = (uint16_t)(int16_t)(acc_rads * (180.0f / 3.14159265f) * 10.0f);
 
     /* 0x31 — Emergency: bit0=estop, bits15-8=fault_code (for diagnostics)  */
-    s_regs[0x31] = (g_robot.sensors.estop ? 0x0001u : 0x0000u)
-                 | ((uint16_t)g_robot.comms.fault_code << 8);
+    s_regs[0x31] = (RobotState.sensors.estop ? 0x0001u : 0x0000u)
+                 | ((uint16_t)RobotState.comms.fault_code << 8);
 
     /* --- Auto-Tune READ registers ---------------------------------------- */
     /* 0x3B / 0x3C — mirror volatile fields written by TIM6 ISR              */

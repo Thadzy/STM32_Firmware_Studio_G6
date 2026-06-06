@@ -141,12 +141,12 @@ static void clear_injections(void)
     g_test_inj.inject_boundary       = false;
     g_test_inj.inject_tracking_error = false;
     /* Guard 3 — clear the direct field injection */
-    g_robot.sensors.current_amps     = 0.0f;
+    RobotState.sensors.current_amps     = 0.0f;
 }
 
 /* Full reset between guards.
    Direct FSM manipulation is intentional: App_Run's FAULT→IDLE handler reads
-   HwIo_GetResetBtn() from hardware (not g_robot.sensors.reset_btn), so it
+   HwIo_GetResetBtn() from hardware (not RobotState.sensors.reset_btn), so it
    cannot be triggered by software alone. The test harness has authority to
    reset directly. The reset_btn pulse below is logged for completeness only. */
 static void apply_reset(void)
@@ -158,17 +158,17 @@ static void apply_reset(void)
     MotorCtrl_Stop();
 
     /* 3. Reset FSM and all fault state */
-    g_robot.fsm                          = STATE_IDLE;
-    g_robot.comms.fault_code             = 0u;
-    g_robot.dbg.safety.tripped_encoder   = false;
-    g_robot.dbg.safety.tripped_boundary  = false;
-    g_robot.dbg.safety.tripped_current   = false;
-    g_robot.dbg.safety.tripped_tracking  = false;
+    RobotState.fsm                          = STATE_IDLE;
+    RobotState.comms.fault_code             = 0u;
+    RobotState.dbg.safety.tripped_encoder   = false;
+    RobotState.dbg.safety.tripped_boundary  = false;
+    RobotState.dbg.safety.tripped_current   = false;
+    RobotState.dbg.safety.tripped_tracking  = false;
 
     /* 4. Disable all guards — each test re-enables only the guard under test */
-    g_robot.dbg.safety.en_encoder_health  = false;
-    g_robot.dbg.safety.en_current_safety  = false;
-    g_robot.dbg.safety.en_tracking_safety = false;
+    RobotState.dbg.safety.en_encoder_health  = false;
+    RobotState.dbg.safety.en_current_safety  = false;
+    RobotState.dbg.safety.en_tracking_safety = false;
 
     /* 5. Re-zero motor position — gives all subsequent tests a known origin.
           MotorCtrl_Zero re-seeds Kalman, s_pos_counts, and re-enables ZVD.  */
@@ -177,12 +177,12 @@ static void apply_reset(void)
 
 static void record_result(uint8_t idx, uint8_t expected_code, uint32_t inject_elapsed_ms)
 {
-    bool pass = (g_robot.comms.fault_code == expected_code);
+    bool pass = (RobotState.comms.fault_code == expected_code);
 
     s_results[idx].ran           = true;
     s_results[idx].passed        = pass;
     s_results[idx].expected_code = expected_code;
-    s_results[idx].actual_code   = g_robot.comms.fault_code;
+    s_results[idx].actual_code   = RobotState.comms.fault_code;
     s_results[idx].elapsed_ms    = inject_elapsed_ms;
 
     if (pass) {
@@ -192,7 +192,7 @@ static void record_result(uint8_t idx, uint8_t expected_code, uint32_t inject_el
     } else {
         TP2_LOG("Guard %u (0x%02X): FAIL  actual_code=0x%02X  elapsed=%lu ms",
                 (unsigned)(idx + 1u), (unsigned)expected_code,
-                (unsigned)g_robot.comms.fault_code,
+                (unsigned)RobotState.comms.fault_code,
                 (unsigned long)inject_elapsed_ms);
     }
 }
@@ -271,7 +271,7 @@ void TestPhase2_Run(void)
        ================================================================== */
     case TP2_G1_SETUP:
         TP2_LOG("Guard 1 (0x40): SETUP  driving motor to 1.0 rad, enabling guard");
-        g_robot.dbg.safety.en_encoder_health = true;
+        RobotState.dbg.safety.en_encoder_health = true;
         /* SetTarget puts s_running=true; velocity PID ramps PWM beyond
            SAFETY_ENC_STALL_PWM (5) within a few ms due to large error.      */
         MotorCtrl_SetTarget(TP2_DRIVE_TARGET_RAD);
@@ -294,7 +294,7 @@ void TestPhase2_Run(void)
         break;
 
     case TP2_G1_WAIT_FAULT:
-        if (g_robot.fsm == STATE_FAULT) {
+        if (RobotState.fsm == STATE_FAULT) {
             record_result(0u, 0x40u, elapsed());
             goto_state(TP2_G1_VERIFY);
         } else if (elapsed() > TP2_G1_FAULT_TIMEOUT) {
@@ -308,7 +308,7 @@ void TestPhase2_Run(void)
     case TP2_G1_VERIFY:
         /* result already recorded in WAIT_FAULT — just log extra detail */
         TP2_LOG("Guard 1 (0x40): tripped_encoder=%u",
-                (unsigned)g_robot.dbg.safety.tripped_encoder);
+                (unsigned)RobotState.dbg.safety.tripped_encoder);
         goto_state(TP2_G1_RESET);
         break;
 
@@ -316,20 +316,20 @@ void TestPhase2_Run(void)
         apply_reset();
         /* Pulse reset_btn for documentation — FSM already at STATE_IDLE.
            App_Run reads HwIo_GetResetBtn() from hardware, not this field.   */
-        g_robot.sensors.reset_btn = true;
+        RobotState.sensors.reset_btn = true;
         goto_state(TP2_G1_WAIT_RESET);
         break;
 
     case TP2_G1_WAIT_RESET:
         if (elapsed() >= TP2_RESET_BTN_HOLD_MS) {
-            g_robot.sensors.reset_btn = false;
+            RobotState.sensors.reset_btn = false;
             goto_state(TP2_G1_WAIT_IDLE);
         }
         break;
 
     case TP2_G1_WAIT_IDLE:
         /* apply_reset() already set fsm=STATE_IDLE; confirm + brief quiesce */
-        if ((g_robot.fsm == STATE_IDLE) && (elapsed() >= TP2_IDLE_CONFIRM_MS)) {
+        if ((RobotState.fsm == STATE_IDLE) && (elapsed() >= TP2_IDLE_CONFIRM_MS)) {
             goto_state(TP2_G2_SETTLE);
         }
         break;
@@ -354,7 +354,7 @@ void TestPhase2_Run(void)
         break;
 
     case TP2_G2_WAIT_FAULT:
-        if (g_robot.fsm == STATE_FAULT) {
+        if (RobotState.fsm == STATE_FAULT) {
             record_result(1u, 0x41u, elapsed());
             goto_state(TP2_G2_VERIFY);
         } else if (elapsed() > TP2_G2_FAULT_TIMEOUT) {
@@ -367,33 +367,33 @@ void TestPhase2_Run(void)
 
     case TP2_G2_VERIFY:
         TP2_LOG("Guard 2 (0x41): tripped_boundary=%u",
-                (unsigned)g_robot.dbg.safety.tripped_boundary);
+                (unsigned)RobotState.dbg.safety.tripped_boundary);
         goto_state(TP2_G2_RESET);
         break;
 
     case TP2_G2_RESET:
         /* clear inject_boundary BEFORE MotorCtrl_Zero to prevent re-trip */
         apply_reset();
-        g_robot.sensors.reset_btn = true;
+        RobotState.sensors.reset_btn = true;
         goto_state(TP2_G2_WAIT_RESET);
         break;
 
     case TP2_G2_WAIT_RESET:
         if (elapsed() >= TP2_RESET_BTN_HOLD_MS) {
-            g_robot.sensors.reset_btn = false;
+            RobotState.sensors.reset_btn = false;
             goto_state(TP2_G2_WAIT_IDLE);
         }
         break;
 
     case TP2_G2_WAIT_IDLE:
-        if ((g_robot.fsm == STATE_IDLE) && (elapsed() >= TP2_IDLE_CONFIRM_MS)) {
+        if ((RobotState.fsm == STATE_IDLE) && (elapsed() >= TP2_IDLE_CONFIRM_MS)) {
             goto_state(TP2_G3_SETTLE);
         }
         break;
 
     /* ==================================================================
        GUARD 3 — Current Fuse (fault 0x42)
-       Method: write g_robot.sensors.current_amps = 5.0 A directly.
+       Method: write RobotState.sensors.current_amps = 5.0 A directly.
                App_Run() and HwIo_Poll100Hz() do NOT update this field,
                so the value persists until apply_reset() clears it.
                Motor must be running (s_running=true) because the current
@@ -407,7 +407,7 @@ void TestPhase2_Run(void)
 
     case TP2_G3_SETUP:
         TP2_LOG("Guard 3 (0x42): SETUP  enabling current guard, starting motor");
-        g_robot.dbg.safety.en_current_safety = true;
+        RobotState.dbg.safety.en_current_safety = true;
         MotorCtrl_SetTarget(TP2_DRIVE_TARGET_RAD);
         goto_state(TP2_G3_INJECT);
         break;
@@ -415,15 +415,15 @@ void TestPhase2_Run(void)
     case TP2_G3_INJECT:
         /* Inject immediately — guard needs 100 ms of persistence, so fault
            arrives at ~100 ms after injection. The overcurrent EMA filter is
-           bypassed because we overwrite the final g_robot field directly.    */
+           bypassed because we overwrite the final RobotState field directly.    */
         TP2_LOG("Guard 3 (0x42): INJECT  current_amps=%.1f A (threshold=%.1f A)",
                 (double)TP2_INJECT_CURRENT_AMPS, (double)CURRENT_FAULT_AMPS);
-        g_robot.sensors.current_amps = TP2_INJECT_CURRENT_AMPS;
+        RobotState.sensors.current_amps = TP2_INJECT_CURRENT_AMPS;
         goto_state(TP2_G3_WAIT_FAULT);
         break;
 
     case TP2_G3_WAIT_FAULT:
-        if (g_robot.fsm == STATE_FAULT) {
+        if (RobotState.fsm == STATE_FAULT) {
             record_result(2u, 0x42u, elapsed());
             goto_state(TP2_G3_VERIFY);
         } else if (elapsed() > TP2_G3_FAULT_TIMEOUT) {
@@ -436,25 +436,25 @@ void TestPhase2_Run(void)
 
     case TP2_G3_VERIFY:
         TP2_LOG("Guard 3 (0x42): tripped_current=%u",
-                (unsigned)g_robot.dbg.safety.tripped_current);
+                (unsigned)RobotState.dbg.safety.tripped_current);
         goto_state(TP2_G3_RESET);
         break;
 
     case TP2_G3_RESET:
         apply_reset();  /* clears current_amps to 0.0f */
-        g_robot.sensors.reset_btn = true;
+        RobotState.sensors.reset_btn = true;
         goto_state(TP2_G3_WAIT_RESET);
         break;
 
     case TP2_G3_WAIT_RESET:
         if (elapsed() >= TP2_RESET_BTN_HOLD_MS) {
-            g_robot.sensors.reset_btn = false;
+            RobotState.sensors.reset_btn = false;
             goto_state(TP2_G3_WAIT_IDLE);
         }
         break;
 
     case TP2_G3_WAIT_IDLE:
-        if ((g_robot.fsm == STATE_IDLE) && (elapsed() >= TP2_IDLE_CONFIRM_MS)) {
+        if ((RobotState.fsm == STATE_IDLE) && (elapsed() >= TP2_IDLE_CONFIRM_MS)) {
             goto_state(TP2_G4_SETTLE);
         }
         break;
@@ -480,7 +480,7 @@ void TestPhase2_Run(void)
 
     case TP2_G4_SETUP:
         TP2_LOG("Guard 4 (0x43): SETUP  enabling tracking guard, target=0.0 rad");
-        g_robot.dbg.safety.en_tracking_safety = true;
+        RobotState.dbg.safety.en_tracking_safety = true;
         /* Target = current position (0.0 after reset) → s_sc.done becomes
            true on the first Tick100Hz call (~10 ms), s_running stays true. */
         MotorCtrl_SetTarget(0.0f);
@@ -506,7 +506,7 @@ void TestPhase2_Run(void)
         break;
 
     case TP2_G4_WAIT_FAULT:
-        if (g_robot.fsm == STATE_FAULT) {
+        if (RobotState.fsm == STATE_FAULT) {
             record_result(3u, 0x43u, elapsed());
             goto_state(TP2_G4_VERIFY);
         } else if (elapsed() > TP2_G4_FAULT_TIMEOUT) {
@@ -519,25 +519,25 @@ void TestPhase2_Run(void)
 
     case TP2_G4_VERIFY:
         TP2_LOG("Guard 4 (0x43): tripped_tracking=%u",
-                (unsigned)g_robot.dbg.safety.tripped_tracking);
+                (unsigned)RobotState.dbg.safety.tripped_tracking);
         goto_state(TP2_G4_RESET);
         break;
 
     case TP2_G4_RESET:
         apply_reset();
-        g_robot.sensors.reset_btn = true;
+        RobotState.sensors.reset_btn = true;
         goto_state(TP2_G4_WAIT_RESET);
         break;
 
     case TP2_G4_WAIT_RESET:
         if (elapsed() >= TP2_RESET_BTN_HOLD_MS) {
-            g_robot.sensors.reset_btn = false;
+            RobotState.sensors.reset_btn = false;
             goto_state(TP2_G4_WAIT_IDLE);
         }
         break;
 
     case TP2_G4_WAIT_IDLE:
-        if ((g_robot.fsm == STATE_IDLE) && (elapsed() >= TP2_IDLE_CONFIRM_MS)) {
+        if ((RobotState.fsm == STATE_IDLE) && (elapsed() >= TP2_IDLE_CONFIRM_MS)) {
             goto_state(TP2_COMPLETE);
         }
         break;
@@ -603,9 +603,9 @@ void TestPhase2_Run(void)
 
        Kalman_Update(&s_kalman, pos_rad);
 
-       g_robot.motion.position_counts = s_pos_counts;
-       g_robot.motion.velocity_rps    = s_kalman.x[1] / (2.0f * M_PI);
-       g_robot.motion.accel_rps2      = s_kalman.x[2] / (2.0f * M_PI);
+       RobotState.motion.position_counts = s_pos_counts;
+       RobotState.motion.velocity_rps    = s_kalman.x[1] / (2.0f * M_PI);
+       RobotState.motion.accel_rps2      = s_kalman.x[2] / (2.0f * M_PI);
 
        if (!s_running) { Motor_SetPWM(0); return; }
 
@@ -617,6 +617,6 @@ void TestPhase2_Run(void)
        float vel_actual = s_kalman.x[1];
        ...
 
-   Guard 3 needs NO hook: g_robot.sensors.current_amps is written here
+   Guard 3 needs NO hook: RobotState.sensors.current_amps is written here
    in the test, and App_Run() / HwIo_Poll100Hz() do not overwrite it.
    ========================================================================= */
