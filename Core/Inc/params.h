@@ -15,8 +15,8 @@
 
 /* Mode selector (PA6): a maintained switch, not momentary — a long hold is
    fine and rejects motor-PWM-switching EMI bursts coupled onto the line.
-   25 × 10 ms = 250 ms of stable reading required before the mode flips.      */
-#define MODE_SWITCH_DEBOUNCE_TICKS  25u
+   100 × 10 ms = 1000 ms of stable reading required before the mode flips.    */
+#define MODE_SWITCH_DEBOUNCE_TICKS  100u
 
 /* --- ADC / Current Sensor (WCS1800, ±35 A) ---------------------------------*/
 /* Zero is auto-calibrated at boot (64-sample average while motor is off).

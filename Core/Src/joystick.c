@@ -3,7 +3,8 @@
 #include <stdint.h>
 
 /* Latest parsed gamepad state — written by ISR callback, read by main loop  */
-static JoyState_t s_state = { 'O', 'O', false };
+static JoyState_t s_state = { false, 'O', 'O' };
+static volatile uint32_t s_joy_last_tick = 0;
 
 /* ── RX callback (called from USART3 DMA idle-line ISR) ──────────────────── */
 static void joy_rx_cb(const uint8_t *buf, uint16_t size)
@@ -22,6 +23,7 @@ static void joy_rx_cb(const uint8_t *buf, uint16_t size)
             s_state.base      = b;
             s_state.emergency = e;
             s_state.connected = (s == 'C');
+            s_joy_last_tick   = HAL_GetTick();
             return; /* take the first valid frame, ignore the rest           */
         }
     }
@@ -43,4 +45,11 @@ void Joystick_SendAudio(char cmd)
 {
     uint8_t msg[2] = { '@', (uint8_t)cmd };
     UartDma_SendJoystick(msg, 2);
+}
+
+bool Joystick_IsAlive(void)
+{
+    /* If we haven't seen a valid packet in 500ms, consider the ESP32 disconnected */
+    if (s_joy_last_tick == 0) return true; /* Hasn't connected yet */
+    return (HAL_GetTick() - s_joy_last_tick) < 500u;
 }

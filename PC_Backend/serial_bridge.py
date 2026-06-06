@@ -4,8 +4,8 @@ serial_bridge.py  —  Phase 7: USB serial demultiplexer
 
 The robot STM32 shares one USB-serial port for two streams:
 
-  $...\r\n  telemetry lines  →  WebSocket broadcast on port 8765  (React dashboard)
-  Modbus RTU frames          →  CRC-validate, forward to COM10  (main.exe on COM11)
+  $...\r\n  telemetry lines  ->  WebSocket broadcast on port 8765  (React dashboard)
+  Modbus RTU frames          ->  CRC-validate, forward to COM10  (main.exe on COM11)
 
 main.exe writes Modbus commands on COM11; the bridge reads COM10 and forwards
 those commands to the robot, then routes the robot's Modbus responses back.
@@ -20,7 +20,7 @@ Requirements:
 Notes:
   - COM10/COM11 must be a virtual COM pair (e.g. com0com).  The bridge opens
     COM10; main.exe opens COM11.  If COM10 is unavailable the Modbus passthrough
-    is disabled but telemetry → WebSocket still works.
+    is disabled but telemetry -> WebSocket still works.
   - Stop any other program (test_robot.py, base system) using the robot port
     before running this bridge.
 """
@@ -62,7 +62,7 @@ HB_HI              = 18537   # 'HI' — PC must reply with this
 HB_SEND_INTERVAL_S = 0.4     # send HI every 400 ms (well inside 2000 ms timeout)
 
 _REG_NAMES = {
-    # ── WRITE registers (PC → robot) ────────────────────────────────────────
+    # ── WRITE registers (PC -> robot) ────────────────────────────────────────
     0x00: 'heartbeat',
     0x01: 'mode',           # 1=Home 2=Jog 4=Auto 8=SetHome 16=Test
     0x02: 'manual_gripper', # 0=Up 1=Down 2=Open 4=Close
@@ -96,7 +96,7 @@ _REG_NAMES = {
     0x23: 'p2p_unit',       # 0=degree 1=index
     0x24: 'p2p_target',     # int16 target
     0x25: 'soft_stop',      # bit0
-    # ── READ registers (robot → PC) ─────────────────────────────────────────
+    # ── READ registers (robot -> PC) ─────────────────────────────────────────
     0x26: 'reed_sensors',   # bit0=Reed1 bit1=Reed2 bit2=Reed3(jaw)
     0x27: 'task',           # bit0=Homing 1=GoPick 2=GoPlace 3=GoPoint
     0x28: 'pos_deg_x10',
@@ -177,9 +177,9 @@ def _read_n(ser: serial.Serial, n: int) -> Optional[bytes]:
 
 
 # ── shared queues & state ──────────────────────────────────────────────────
-_ws_q:      "queue.Queue[str]"   = queue.Queue()   # telemetry lines → WS clients
-_to_com10:  "queue.Queue[bytes]" = queue.Queue()   # robot responses → COM10
-_to_robot:  "queue.Queue[bytes]" = queue.Queue()   # commands from COM10 → robot
+_ws_q:      "queue.Queue[str]"   = queue.Queue()   # telemetry lines -> WS clients
+_to_com10:  "queue.Queue[bytes]" = queue.Queue()   # robot responses -> COM10
+_to_robot:  "queue.Queue[bytes]" = queue.Queue()   # commands from COM10 -> robot
 _stop       = threading.Event()
 _ws_clients: set = set()
 _ws_lock    = threading.Lock()
@@ -204,7 +204,7 @@ def _http_server_thread() -> None:
         try:
             socketserver.TCPServer.allow_reuse_address = True
             with socketserver.TCPServer(("", port), QuietHandler) as httpd:
-                print(f"[http] Dashboard served at → http://localhost:{port}/controller_dashboard.html")
+                print(f"[http] Dashboard served at -> http://localhost:{port}/controller_dashboard.html")
                 httpd.serve_forever()
         except OSError:
             port += 1
@@ -214,8 +214,8 @@ def _http_server_thread() -> None:
 def _robot_reader(ser: serial.Serial) -> None:
     """
     Reads robot serial indefinitely.
-      '$'          → read ASCII line → put in _ws_q (WebSocket telemetry)
-      SLAVE_ADDR   → read Modbus response, CRC-check, put in _to_com10
+      '$'          -> read ASCII line -> put in _ws_q (WebSocket telemetry)
+      SLAVE_ADDR   -> read Modbus response, CRC-check, put in _to_com10
     """
     _bad_count  = 0
     _last_log_t = 0.0   # last time a BAD-CRC line was printed
@@ -429,7 +429,7 @@ def _robot_reader(ser: serial.Serial) -> None:
                         _last_estop = estop
                         blocking = fcode not in (0, 0x20)
                         print(f"[STATUS] fault={fdesc} | estop={'YES !!!' if estop else 'no'}"
-                              f"{'  → PRESS RESET BTN on hardware' if blocking else ''}")
+                              f"{'  -> PRESS RESET BTN on hardware' if blocking else ''}")
             else:
                 _bad_count += 1
                 now = time.monotonic()
@@ -465,7 +465,7 @@ def _robot_writer(ser: serial.Serial) -> None:
 # ── COM10 reader thread ────────────────────────────────────────────────────
 def _com10_reader(ser: serial.Serial) -> None:
     """
-    Read Modbus commands from COM10 (main.exe on COM11) → _to_robot queue.
+    Read Modbus commands from COM10 (main.exe on COM11) -> _to_robot queue.
     main.exe is trusted so we forward without CRC validation.
     """
     _last_written_val = {}
@@ -619,7 +619,7 @@ async def _ws_broadcaster() -> None:
 
 async def _ws_main() -> None:
     async with websockets.serve(_ws_handler, "0.0.0.0", WS_PORT):
-        print(f"[ws] Server ready  →  ws://localhost:{WS_PORT}")
+        print(f"[ws] Server ready  ->  ws://localhost:{WS_PORT}")
         await _ws_broadcaster()
 
 
@@ -696,7 +696,7 @@ def main() -> None:
     if _ROBOT_PORT is None:
         robot_port = _find_stm32_port()
         if robot_port:
-            print(f"\n[OK] STM32 found by description → {robot_port}")
+            print(f"\n[OK] STM32 found by description -> {robot_port}")
         else:
             print("\n[WARN] No STMicroelectronics port found — falling back to ping scan...")
             robot_port = next(
@@ -743,7 +743,7 @@ def main() -> None:
     # ── 6. Startup summary ─────────────────────────────────────────────────
     print()
     print("=" * 60)
-    print(f"  Robot (STM32)  : {_ROBOT_PORT}  ✓")
+    print(f"  Robot (STM32)  : {_ROBOT_PORT}  [OK]")
     if ser_com10:
         print(f"  Bridge side    : {bridge_side}")
         print(f"  *** main.exe   : configure to use {mainexe_side} ***")

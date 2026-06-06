@@ -160,6 +160,11 @@ typedef struct {
         bool bypass;       /* true = ZVD off (direct S-curve) */
     } zvd;
 
+    /* Homing Calibration */
+    struct {
+        float offset_deg;  /* Live-tunable 0-degree offset calibration */
+    } homing;
+
 } TuningParams_t;
 
 extern TuningParams_t TuningParams;

@@ -11,20 +11,16 @@
    emergency: O=none  P=pressed
    connected: true when a Bluetooth controller is paired to the ESP32       */
 typedef struct {
+    bool connected;
     char base;
     char emergency;
-    bool connected;
 } JoyState_t;
 
-/* Register USART3 DMA callback — call once from App_Init()                  */
-void       Joystick_Init(void);
+/* Initialize USART3 DMA reception */
+void Joystick_Init(void);
 
-/* Return the most recent parsed state (safe to call from main loop)         */
+/* Get the most recent gamepad state */
 JoyState_t Joystick_GetState(void);
 
-/* Send a single-character audio command to the ESP32 buzzer.
-   Commands: 'h'=homing started  'H'=homing done  'E'=fault  'C'=fault cleared
-   Transmitted as two bytes: '@' + cmd                                       */
-void       Joystick_SendAudio(char cmd);
 
 #endif /* __JOYSTICK_H */

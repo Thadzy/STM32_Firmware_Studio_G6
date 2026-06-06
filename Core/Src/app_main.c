@@ -19,6 +19,13 @@ extern TIM_HandleTypeDef htim6;
 #endif
 
 /* =========================================================================
+   DEBUG OVERRIDE
+   Set to 1 to temporarily disable all autonomous faults (Heartbeat, Joystick 
+   watchdog, Homing timeouts, E-stop). Useful for uninterrupted tuning!
+   ========================================================================= */
+#define DISABLE_ALL_FAULTS 1
+
+/* =========================================================================
    Homing sub-state machine
    Motion law: ALWAYS HomingCreep (HOMING_VEL_RADS). Never S-curve during home.
 
@@ -58,6 +65,7 @@ static float    s_search_start_rad; /* position when FIND_EDGE_B begins (for saf
 static float    s_backoff_start_rad; /* position when prox first cleared during HOM_BACKOFF   */
 static uint32_t s_settle_t;
 static uint32_t s_center_start_ms; /* HAL_GetTick when GO_CENTER begins — for timeout        */
+static uint32_t s_hom_start_ms;    /* HAL_GetTick when homing starts — for overall timeout   */
 static float    s_home_offset_rad;
 static float    s_user_home_rad;    /* park position saved by SetHome (post-calibration frame) */
 static int8_t   s_go_center_dir;    /* tracks last dir in HOM_GO_CENTER — avoids repeated HomingCreep calls */
@@ -261,10 +269,22 @@ static void homing_run(void)
     float    pos  = MotorCtrl_GetPosition_rad();
     uint32_t now  = HAL_GetTick();
 
+    /* Overall homing watchdog (Task 3): prevent endless grinding if a reed switch fails */
+#if !DISABLE_ALL_FAULTS
+    if (s_hom != HOM_INIT && s_hom != HOM_IDLE && (now - s_hom_start_ms) > 15000u) {
+        RobotState.fsm              = STATE_FAULT;
+        RobotState.comms.fault_code = 5u; /* Homing overall timeout */
+        MotorCtrl_Stop();
+        s_hom = HOM_IDLE;
+        return;
+    }
+#endif
+
     switch (s_hom) {
 
     /* ------------------------------------------------------------------ */
     case HOM_INIT:
+        s_hom_start_ms    = HAL_GetTick();
         s_sweep_start_rad = pos;
         s_sweep_dir       = +1;
         s_sweep_amp_rad   = deg_to_rad(HOMING_WIGGLE_STEP_DEG); /* first step */
@@ -293,10 +313,12 @@ static void homing_run(void)
                 s_sweep_amp_rad  += deg_to_rad(HOMING_WIGGLE_STEP_DEG);
 
                 if (s_sweep_amp_rad > deg_to_rad(HOMING_WIGGLE_MAX_DEG)) {
+#if !DISABLE_ALL_FAULTS
                     RobotState.fsm              = STATE_FAULT;
                     RobotState.comms.fault_code = 4u; /* sensor not found in sweep */
                     MotorCtrl_Stop();
                     break;
+#endif
                 }
                 MotorCtrl_HomingCreepVel(s_sweep_dir, HOMING_FAST_VEL_RADS);
             }
@@ -322,9 +344,11 @@ static void homing_run(void)
         if (HwIo_GetProximity()) {
             s_backoff_start_rad = pos;        /* still inside — keep arming  */
             if (fabsf(pos - s_sweep_start_rad) > deg_to_rad(HOMING_BACKOFF_MAX_DEG)) {
+#if !DISABLE_ALL_FAULTS
                 RobotState.fsm              = STATE_FAULT;
                 RobotState.comms.fault_code = 3u; /* sensor never cleared       */
                 MotorCtrl_Stop();
+#endif
             }
         } else if (fabsf(pos - s_backoff_start_rad) >= deg_to_rad(HOMING_BACKOFF_DEG)) {
             /* Fully clear + margin — reverse into sensor at PRECISION vel.  */
@@ -345,9 +369,11 @@ static void homing_run(void)
             hom_dbg("EA1", rad_to_deg(pos), rad_to_deg(s_sweep_amp_rad), rad_to_deg(pos));
             s_hom = HOM_PREC_OVERSHOOT;
         } else if (fabsf(pos - s_search_start_rad) > deg_to_rad(HOMING_MAX_SEARCH_DEG)) {
+#if !DISABLE_ALL_FAULTS
             RobotState.fsm              = STATE_FAULT;
             RobotState.comms.fault_code = 2u;     /* edge A not found            */
             MotorCtrl_Stop();
+#endif
         }
         break;
 
@@ -369,9 +395,11 @@ static void homing_run(void)
                 s_hom = HOM_FIND_EDGE_B;
             } else if (past > deg_to_rad(HOMING_OVERSHOOT_MAX_DEG)) {
                 /* Sensor never went OFF — zone too wide or sensor stuck ON   */
+#if !DISABLE_ALL_FAULTS
                 RobotState.fsm              = STATE_FAULT;
                 RobotState.comms.fault_code = 3u;
                 MotorCtrl_Stop();
+#endif
             }
         }
         break;
@@ -391,9 +419,11 @@ static void homing_run(void)
             s_hom = HOM_GO_CENTER;
         } else if (fabsf(pos - s_search_start_rad) > deg_to_rad(HOMING_MAX_SEARCH_DEG)) {
             /* Safety: edge B not found within search range — fault        */
+#if !DISABLE_ALL_FAULTS
             RobotState.fsm              = STATE_FAULT;
             RobotState.comms.fault_code = 2u;
             MotorCtrl_Stop();
+#endif
         }
         break;
 
@@ -429,7 +459,7 @@ static void homing_run(void)
                Fine-tune: reg 0x32 in whole degrees (user-adjustable, default 0).  */
             float base_rad  = deg_to_rad(-HOME_OFFSET_DEG);
             int16_t adj_deg = (int16_t)ModbusBridge_GetReg(MODBUS_REG_HOME_OFFSET);
-            s_home_offset_rad = base_rad + deg_to_rad((float)adj_deg);
+            s_home_offset_rad = base_rad + deg_to_rad((float)adj_deg) + deg_to_rad(TuningParams.homing.offset_deg);
             hom_dbg("ZERO", rad_to_deg((s_edge_a + s_edge_b) * 0.5f),
                     rad_to_deg(s_user_home_rad),
                     rad_to_deg(MotorCtrl_GetPosition_rad()));
@@ -566,12 +596,21 @@ static void handle_joystick(void)
 
     JoyState_t joy = Joystick_GetState();
 
-    if (!joy.connected) {
+    if (!joy.connected || !Joystick_IsAlive()) {
         /* Gamepad lost mid-jog — release cleanly so motor does not coast */
 #ifdef JOG_OPTION_1
         if (s_jog_vel_active)  { MotorCtrl_JogRelease();       s_jog_vel_active  = false; }
 #else
         if (s_jog_step_active) { MotorCtrl_JogStepDisengage(); s_jog_step_active = false; }
+#endif
+#if !DISABLE_ALL_FAULTS
+        if (RobotState.fsm != STATE_FAULT) {
+            MotorCtrl_Stop();
+            RobotState.fsm = STATE_FAULT;
+            RobotState.comms.fault_code = 0x11u; /* 0x11 for joystick connection lost */
+            s_run_mode = RUN_IDLE;
+            set_task(0x0000);
+        }
 #endif
         return;
     }
@@ -583,6 +622,7 @@ static void handle_joystick(void)
 #else
         if (s_jog_step_active) { MotorCtrl_JogStepDisengage(); s_jog_step_active = false; }
 #endif
+#if !DISABLE_ALL_FAULTS
         if (RobotState.fsm != STATE_FAULT) {
             MotorCtrl_Stop();
             RobotState.fsm              = STATE_FAULT;
@@ -590,6 +630,7 @@ static void handle_joystick(void)
             s_run_mode               = RUN_IDLE;
             set_task(0x0000);
         }
+#endif
         return;
     }
 
@@ -695,12 +736,14 @@ static void handle_joystick(void)
 static void fsm_run(void)
 {
     /* E-stop: NO switch to VCC, PULLDOWN — safe to enable, no false-triggers */
+#if !DISABLE_ALL_FAULTS
     if (RobotState.sensors.estop && RobotState.fsm != STATE_FAULT) {
         RobotState.fsm              = STATE_FAULT;
         RobotState.comms.fault_code = 0x01u;
         MotorCtrl_Stop();
         set_task(0x0000);
     }
+#endif
 
     uint16_t mode_reg = ModbusBridge_GetReg(0x01);
 
@@ -1036,6 +1079,7 @@ void App_Run(void)
         RobotState.dbg.hb_age_ms = (hb_age > 0xFFFFu) ? 0xFFFFu : (uint16_t)hb_age;
         /* Do not interrupt homing — it has its own safety limits (FAULT codes 2-4).
            Stopping mid-sweep corrupts edge detection and causes 0.4°/12s creep. */
+#if !DISABLE_ALL_FAULTS
         if (hb_age >= HEARTBEAT_TIMEOUT_MS &&
             RobotState.fsm != STATE_FAULT    &&
             RobotState.fsm != STATE_HOMING) {
@@ -1045,6 +1089,7 @@ void App_Run(void)
             RobotState.comms.fault_code = 0x20u; /* PC Link Lost */
             set_task(0x0000);
         }
+#endif
     }
 
     /* Update debug mirror — expand RobotState in Live Expressions to see all */
