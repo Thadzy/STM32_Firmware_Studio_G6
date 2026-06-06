@@ -1,6 +1,6 @@
-# CLAUDE.md
+# AGENTS.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
 
 ## Build & Flash
 
@@ -159,40 +159,6 @@ Added `DEBUG = True` flag. When set:
 - FC=0x03 success logs include the heartbeat register value (flags YA).
 - FC=0x03 CRC failures print expected vs received CRC and a hex dump of head/tail bytes.
 - FC=0x06 writes from main.exe to robot are logged (heartbeat HI, home command, etc.).
-
-## Jog (PC Discrete Step) — Known Issues Fixed
-
-Six bugs found and resolved during hardware testing. **Never revert these without understanding all six.**
-
-### 1. ZVD bypass overridden every outer-loop tick (`motor_controller.c`)
-
-`s_zvd_bypass = g_robot.dbg.zvd_bypass` ran unconditionally in `Tick100Hz`, overwriting the `true` set by `JogStepEngage` 10 ms later. ZVD re-engaged on every step → 80 ms latency + reference/motor mismatch → oscillation.
-**Fix:** `if (!s_jog_step) s_zvd_bypass = g_robot.dbg.zvd_bypass;`
-
-### 2. PC jog used position PID cascade (`app_main.c`)
-
-`SetTarget` → `IsAtTarget` generated `vel_cmd = Kp × small_error ≈ 0.4 rad/s` → inner loop output `lroundf(1.93) = 2 PWM` — near the motor dead zone. Arm crept for 10 s then timed out.
-**Fix:** PC jog now uses `MotorCtrl_JogVelocity` (velocity bypass, same path as homing/joystick Option 1). `RUN_JOG` monitors `|pos − target| ≤ 1°` and calls `JogRelease` to stop.
-
-### 3. `handle_joystick` canceled PC jog every App_Run (`app_main.c`)
-
-When `s_joy_mode=false` and `s_jog_vel_active=true`, the cleanup block called `JogRelease` every iteration, pulsing the motor for one loop cycle then braking. Positive direction survived on gravity/momentum; negative direction failed completely.
-**Fix:** `if (g_robot.fsm != STATE_RUNNING)` guard around the cleanup block.
-
-### 4. `MotorCtrl_Stop()` left `s_running=false` with `s_jog_active=true` (`motor_controller.c`)
-
-`JogVelocity` only set `s_running=true` on first entry (`if (!s_jog_active)`). Any `Stop()` call mid-jog (mode switch, heartbeat edge case) set `s_running=false`; subsequent `JogVelocity` calls skipped the first-entry block → inner loop bailed at `if (!s_running)` → PWM = 0 forever.
-**Fix:** `s_running = true` moved outside the `if (!s_jog_active)` guard — always re-enabled.
-
-### 5. Instant velocity command caused direction-reversal stall (`motor_controller.c`)
-
-Jumping `s_vel_sp` to ±1 rad/s instantly (while arm was still coasting from previous positive jog) applied full braking then drive in one tick. Motor stalled at the reversal zero-crossing.
-**Fix:** `s_vel_sp` ramped toward `s_jog_vel_cmd` at `JOG_PC_ACCEL_RADS2 = 5 rad/s²` in `Tick100Hz`, identical to the homing creep ramp.
-
-### 6. Mode switch EMI during negative motor direction (`app_main.c`)
-
-Motor PWM switching during negative direction coupled noise onto the mode switch GPIO (PA6, PULLUP). The 100 ms debounce passed, triggering the mode switch handler → `MotorCtrl_Stop()` + `STATE_IDLE` mid-jog.
-**Fix:** `g_robot.fsm != STATE_RUNNING` guard in the mode switch handler. Mode changes take effect after current motion completes.
 
 ## Implementation Status
 

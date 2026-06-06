@@ -41,6 +41,7 @@ typedef struct {
     /* --- Motion (written by motor_controller from TIM6 ISR 1 kHz) -------- */
     struct {
         volatile int64_t position_counts;   /* encoder counts from home      */
+        volatile float   current_pos_deg;   /* raw position in degrees       */
         volatile float   velocity_rps;      /* revolutions per second        */
         volatile float   accel_rps2;        /* rev / s²                      */
         volatile int16_t motor_pwm;         /* current PWM command (-50…+50) */

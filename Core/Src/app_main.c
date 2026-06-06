@@ -89,9 +89,11 @@ static bool      s_joy_mode = false; /* true = joystick active, false = base sys
 
 /* Jog mode tracking — only one option is active at a time.
    s_jog_vel_active  : Option 1 — velocity bypass is running.
-   s_jog_step_active : Option 2 — aggressive step mode is engaged.            */
-static bool s_jog_vel_active  = false;
-static bool s_jog_step_active = false;
+   s_jog_step_active : Option 2 — aggressive step mode is engaged.
+   s_jog_target_rad  : PC discrete step target (used by RUN_JOG velocity loop) */
+static bool  s_jog_vel_active  = false;
+static bool  s_jog_step_active = false;
+static float s_jog_target_rad  = 0.0f;
 
 /* Auto sequence state */
 static uint8_t  s_seq_pairs;            /* number of pick+place pairs (max 8)    */
@@ -312,7 +314,7 @@ static void homing_run(void)
     case HOM_GO_CENTER: {
         float center = (s_edge_a + s_edge_b) * 0.5f;
         float err    = center - pos;
-        bool  close  = fabsf(err) <= deg_to_rad(0.5f);
+        bool  close  = fabsf(err) <= deg_to_rad(0.1f);
         bool  timeout = (now - s_center_start_ms) >= HOMING_CENTER_TIMEOUT_MS;
 
         if (close || timeout) {
@@ -428,12 +430,16 @@ static void auto_run(void)
 static void handle_joystick(void)
 {
     if (!s_joy_mode) {
-        /* Mode switched away — release any active jog cleanly */
+        /* Mode switched away — release joystick velocity jog cleanly.
+           Guard: do NOT cancel during STATE_RUNNING (PC discrete jog owns
+           s_jog_vel_active in that state and calls JogRelease itself).        */
+        if (g_robot.fsm != STATE_RUNNING) {
 #ifdef JOG_OPTION_1
-        if (s_jog_vel_active)  { MotorCtrl_JogRelease();       s_jog_vel_active  = false; }
+            if (s_jog_vel_active)  { MotorCtrl_JogRelease();       s_jog_vel_active  = false; }
 #else
-        if (s_jog_step_active) { MotorCtrl_JogStepDisengage(); s_jog_step_active = false; }
+            if (s_jog_step_active) { MotorCtrl_JogStepDisengage(); s_jog_step_active = false; }
 #endif
+        }
         return;
     }
 
@@ -606,16 +612,21 @@ static void fsm_run(void)
                     s_jog_vel_active = false;
                 }
 
-                /* Compute absolute target: current_pos + step_size_deg → radians.
-                   step_raw is int16 → cast to float preserves sign correctly.   */
+                /* Velocity-bypass jog: drive toward target at JOG_PC_VEL_RADS.
+                   Bypasses position PID (which generates too small a velocity
+                   command for fine steps).  RUN_JOG monitors position and calls
+                   JogRelease() when within the deadband.                       */
                 float step_rad = deg_to_rad((float)step_raw);
-                float target   = MotorCtrl_GetPosition_rad() + step_rad;
+                s_jog_target_rad = MotorCtrl_GetPosition_rad() + step_rad;
 
-                MotorCtrl_SetTarget(target);
+                float dir = (step_raw > 0) ? 1.0f : -1.0f;
+                MotorCtrl_JogVelocity(dir * JOG_PC_VEL_RADS);
+                s_jog_vel_active = true;
+
                 set_task(0x0008);           /* GoPoint                           */
                 s_move_start_ms = HAL_GetTick();
                 g_robot.fsm = STATE_RUNNING;
-                s_run_mode  = RUN_POINT;
+                s_run_mode  = RUN_JOG;
             }
         } else if (mode_reg & 0x04u) {                  /* Auto             */
             uint8_t pairs = (uint8_t)ModbusBridge_GetReg(0x22);
@@ -686,7 +697,30 @@ static void fsm_run(void)
             break;
         }
         switch (s_run_mode) {
-        case RUN_JOG:
+        case RUN_JOG: {
+            /* Velocity-bypass jog: drive toward s_jog_target_rad at fixed
+               speed.  Stop when within the position deadband.                 */
+            float pos = MotorCtrl_GetPosition_rad();
+            float err = s_jog_target_rad - pos;
+
+            if (fabsf(err) <= POSITION_DEADBAND_RAD) {
+                MotorCtrl_JogRelease();
+                s_jog_vel_active = false;
+                g_robot.fsm = STATE_IDLE;
+                s_run_mode  = RUN_IDLE;
+                set_task(0x0000);
+            } else if ((HAL_GetTick() - s_move_start_ms) >= MOVE_TIMEOUT_MS) {
+                MotorCtrl_JogRelease();
+                s_jog_vel_active = false;
+                g_robot.fsm = STATE_IDLE;
+                s_run_mode  = RUN_IDLE;
+                set_task(0x0000);
+            } else {
+                float dir = (err > 0.0f) ? 1.0f : -1.0f;
+                MotorCtrl_JogVelocity(dir * JOG_PC_VEL_RADS);
+            }
+            break;
+        }
         case RUN_POINT:
             if (MotorCtrl_IsAtTarget()) {
                 g_robot.fsm = STATE_IDLE;
@@ -779,7 +813,9 @@ void App_Run(void)
 
     /* Mode switch: ignore during FAULT (emergency can cause GPIO transients).
        Soft-stop any running motion so new mode takes control from clean state. */
-    if (g_robot.sensors.selected_mode != s_joy_mode && g_robot.fsm != STATE_FAULT) {
+    if (g_robot.sensors.selected_mode != s_joy_mode
+        && g_robot.fsm != STATE_FAULT
+        && g_robot.fsm != STATE_RUNNING) {
         /* Release any active jog before switching modes so the motor stops
            cleanly and all integrals are reset regardless of which option is active */
         if (s_jog_vel_active)  { MotorCtrl_JogRelease();       s_jog_vel_active  = false; }

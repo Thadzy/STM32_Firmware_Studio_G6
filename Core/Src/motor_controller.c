@@ -59,10 +59,13 @@ static volatile float s_homing_vel;
 static volatile bool  s_jog_active;
 static volatile float s_jog_vel_cmd;
 
-/* ---- Option 2: Runtime S-curve limits (aggressive during jog stepping) ----
-   Replacing the compile-time macros with runtime scalars lets JogStepEngage /
-   JogStepDisengage raise and restore Amax / Jmax without a recompile.
-   Initialised to the hardware-identified values in MotorCtrl_Init().           */
+/* ---- Option 2: Jog step mode flag -----------------------------------------
+   s_jog_step  : true while jog step mode is engaged.  Guards s_zvd_bypass
+                 from being overwritten by the live-expression debugger toggle
+                 every outer-loop tick.
+   s_sc_amax/jmax : runtime S-curve limits; equal to SCURVE_ defaults during
+                 normal moves and jog — no override needed.                    */
+static bool  s_jog_step;
 static float s_sc_amax;   /* current Amax (rad/s²) used by scurve_step()       */
 static float s_sc_jmax;   /* current Jmax (rad/s³) used by scurve_step()       */
 
@@ -426,6 +429,7 @@ void MotorCtrl_Tick1kHz(void)
 
     /* --- 3. Update g_robot.motion ---------------------------------------- */
     g_robot.motion.position_counts = s_pos_counts;
+    g_robot.motion.current_pos_deg = (float)s_pos_counts * (360.0f / (float)ENCODER_CPR);
     g_robot.motion.velocity_rps    = s_kalman.x[1] / (2.0f * M_PI);
     g_robot.motion.accel_rps2      = s_kalman.x[2] / (2.0f * M_PI);
 
@@ -667,9 +671,10 @@ void MotorCtrl_Tick100Hz(void)
     }
 
     /* Live-expression toggle: g_robot.dbg.zvd_bypass can be written from the
-       STM32CubeIDE debugger without recompiling.  Mirrors to s_zvd_bypass so
-       the change takes effect on the next outer-loop tick.                    */
-    s_zvd_bypass = g_robot.dbg.zvd_bypass;
+       STM32CubeIDE debugger without recompiling.  Guarded during jog step
+       mode so JogStepEngage's s_zvd_bypass=true is not overwritten every tick
+       (which would re-engage ZVD and add 80 ms latency to every jog step).   */
+    if (!s_jog_step) s_zvd_bypass = g_robot.dbg.zvd_bypass;
 
     if (!s_running) goto send_telemetry;
 
@@ -695,8 +700,17 @@ void MotorCtrl_Tick100Hz(void)
     if (s_jog_active) {
         s_pos_integral  = 0.0f;
         s_pos_prev_meas = s_kalman.x[0];
-        s_vel_sp        = s_jog_vel_cmd;
-        s_acc_sp        = 0.0f;
+        /* Ramp toward commanded velocity — same approach as homing creep.
+           Prevents harsh direction reversals when the arm is still coasting
+           from a previous move, which can stall the motor at low PWM.        */
+        {
+            float ramp = JOG_PC_ACCEL_RADS2 * DT_OUTER;
+            if (s_vel_sp < s_jog_vel_cmd)
+                s_vel_sp = (s_vel_sp + ramp > s_jog_vel_cmd) ? s_jog_vel_cmd : s_vel_sp + ramp;
+            else
+                s_vel_sp = (s_vel_sp - ramp < s_jog_vel_cmd) ? s_jog_vel_cmd : s_vel_sp - ramp;
+        }
+        s_acc_sp = 0.0f;
         goto send_telemetry;
     }
 
@@ -816,6 +830,7 @@ void MotorCtrl_JogVelocity(float vel_rads)
     if (vel_rads >  SCURVE_VMAX_RADS) { vel_rads =  SCURVE_VMAX_RADS; }
     if (vel_rads < -SCURVE_VMAX_RADS) { vel_rads = -SCURVE_VMAX_RADS; }
 
+    s_running = true;   /* always: re-enable if Stop() was called mid-jog */
     if (!s_jog_active) {
         /* First-entry housekeeping (main-loop context, ISR not yet aware).
            - Clear position integral NOW so the bypass block in Tick100Hz
@@ -824,8 +839,7 @@ void MotorCtrl_JogVelocity(float vel_rads)
              velocity correctly; preserving its integral gives a bumpless
              entry into velocity-only control (no speed transient at engage). */
         s_pos_integral  = 0.0f;
-        s_pos_prev_meas = s_kalman.x[0]; /* pre-seed derivative, no kick on re-engage */
-        s_running       = true;
+        s_pos_prev_meas = s_kalman.x[0];
         s_jog_active    = true;           /* last: ISR sees consistent state */
     }
     s_jog_vel_cmd = vel_rads;
@@ -895,20 +909,9 @@ bool MotorCtrl_IsJogActive(void)
 
 /* MotorCtrl_JogStepEngage — call once when the first L/R key press is detected.
 
-   The root cause of ZVD clashing with rapid discrete steps is that the ZVD
-   buffer holds 8 delayed position taps (80 ms of history at 100 Hz).  When
-   a new step arrives before the previous taps drain, the superposition of old
-   and new weighted positions creates destructive interference.
-
-   Two simultaneous fixes:
-   a) s_zvd_bypass = true  — the shaper outputs s_sc.pos directly.  No delayed
-      taps means no interference.  Vibration suppression is sacrificed during
-      jogging, which is acceptable: the operator is watching the arm, short
-      steps have low momentum, and ZVD latency (80 ms) makes the arm feel sluggish.
-   b) Raise Amax / Jmax so each discrete step completes well within one App_Run
-      interval.  Even if step N is slightly delayed, step N+1 SetTarget() call
-      arrives after the S-curve has reached .done = true, so there is no
-      mid-trajectory conflict.                                                  */
+   Switches Tick100Hz to the trapezoidal planner (trap_step) and bypasses ZVD.
+   ZVD latency (80 ms) makes discrete jog steps feel sluggish; with no rod
+   resonance to suppress during manual jogging, bypassing it is acceptable.    */
 void MotorCtrl_JogStepEngage(void)
 {
     /* Flush the ZVD buffer to current position — prevents stale taps from
@@ -919,13 +922,10 @@ void MotorCtrl_JogStepEngage(void)
         for (i = 0u; i < ZVD_BUF_SIZE; i++) { s_zvd_buf[i] = pos; }
     }
 
-    s_zvd_bypass = true;                /* shaper pass-through                */
-    s_sc_amax    = JOG_STEP_AMAX_RADS2;/* override runtime S-curve limits     */
-    s_sc_jmax    = JOG_STEP_JMAX_RADS3;
+    s_jog_step   = true;   /* guards s_zvd_bypass from live-toggle override   */
+    s_zvd_bypass = true;
 
-    /* Re-seed S-curve from current state before the first SetTarget() call.
-       Without this, the S-curve planner may have stale position from the last
-       normal move, causing an erroneous initial deceleration profile.         */
+    /* Seed S-curve from current state so the first SetTarget() starts clean  */
     {
         float pos    = s_kalman.x[0];
         s_sc.pos     = pos;
@@ -938,21 +938,15 @@ void MotorCtrl_JogStepEngage(void)
 
 /* MotorCtrl_JogStepDisengage — call when the L/R key is released.
 
-   Integral note: aggressive Amax/Jmax causes the motor to reach the step
-   target quickly with minimal position error at the end.  However, any small
-   residual error after each rapid step is integrated by s_pos_integral.  Over
-   many steps the integral can accumulate a bias.  Clearing it on disengage
-   ensures the first post-jog position command starts from a clean baseline.   */
+   Any small residual position error after each jog step is integrated by
+   s_pos_integral.  Clearing it on disengage ensures the first post-jog
+   position command starts from a clean baseline.                              */
 void MotorCtrl_JogStepDisengage(void)
 {
-    /* Restore default S-curve limits (hardware-identified) */
-    s_sc_amax = SCURVE_AMAX_RADS2;
-    s_sc_jmax = SCURVE_JMAX_RADS3;
+    s_jog_step = false;
 
-    /* Re-enable ZVD.  Flush buffer to current position so the first shaped
-       output after re-engagement is exactly the current position — the ZVD
-       delay then ramps in naturally over the next 80 ms (T3_STEPS ticks)
-       rather than injecting the position history of the last jog step.       */
+    /* Re-enable ZVD.  Flush buffer so the first shaped output is current
+       position — ZVD delay ramps in naturally over the next 80 ms.           */
     {
         float pos = s_kalman.x[0];
         uint8_t i;
@@ -960,7 +954,6 @@ void MotorCtrl_JogStepDisengage(void)
     }
     s_zvd_bypass = false;
 
-    /* Clear integrals accumulated during aggressive stepping */
     s_pos_integral = 0.0f;
     s_spd_integral = 0.0f;
 }

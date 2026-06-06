@@ -98,7 +98,7 @@ _HOM_LABELS = {
     'ZERO': ('center', 'park'),
 }
 
-_quiet = False   # suppress $T telemetry spam during interactive monitors
+_quiet = True    # suppress $T telemetry spam during interactive monitors
 
 def _tel(line: str):
     if _quiet and line.startswith('$T,'):
@@ -472,9 +472,9 @@ Commands:
             elif cmd == 'h':
                 test_homing(ser)
             elif cmd == 'j':
-                test_jog(ser, 15)
+                test_jog(ser, 10)
             elif cmd == 'J':
-                test_jog(ser, -15)
+                test_jog(ser, -10)
             elif cmd.startswith('j') and len(cmd) > 1:
                 try:
                     test_jog(ser, int(cmd[1:]))

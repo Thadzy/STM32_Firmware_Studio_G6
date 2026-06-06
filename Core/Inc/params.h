@@ -134,7 +134,7 @@
    To shift working 0° further by N°, subtract N from this value.
    Example: measured −3.12°, want extra +10° working offset → set −13.12°.
    Adjust reg 0x32 (int16 degrees) for small per-session fine-tuning.          */
-#define HOME_OFFSET_DEG         (-3.12f)   /* degrees from sensor center to physical home */
+#define HOME_OFFSET_DEG         (-4.658f)   /* degrees from sensor center to physical home */
 #define HOMING_WIGGLE_MAX_DEG   180.0f  /* max search range from start before FAULT            */
 #define HOMING_OVERSHOOT_DEG         5.0f   /* min deg past edge A before even checking for clear  */
 #define HOMING_OVERSHOOT_MAX_DEG    45.0f   /* abort if sensor never clears within this travel     */
@@ -154,11 +154,16 @@
    At 1.0 rad/s ≈ 57°/s the arm traverses 360° in ~6 s.                      */
 #define JOY_JOG_VEL_RADS        1.0f    /* rad/s — direct velocity during L/R hold */
 
-/* Option 2 — Aggressive S-curve during discrete steps: each 10° step must
-   complete fast enough that the ZVD buffer is drained before the next command.
-   At Amax=150 rad/s² a 0.17 rad step finishes in < 80 ms at 100 Hz.         */
-#define JOG_STEP_AMAX_RADS2     150.0f  /* rad/s² — ~5× normal Amax during jog   */
-#define JOG_STEP_JMAX_RADS3    8000.0f  /* rad/s³ — ~6× normal Jmax during jog   */
+/* PC jog step velocity: velocity-bypass drive toward the discrete step target.
+   Uses the same inner-loop bypass as homing/joystick (no position PID).
+   1.0 rad/s ≈ 57°/s — fast enough to feel crisp, slow enough to stop cleanly
+   within the 1° deadband without overshoot.                                   */
+#define JOG_PC_VEL_RADS         1.0f    /* rad/s — PC discrete jog step velocity  */
+#define JOG_PC_ACCEL_RADS2      5.0f    /* rad/s² — velocity ramp rate for jog    */
+
+/* Option 2 — S-curve discrete jog steps use the normal SCURVE_ limits.
+   No Amax/Jmax override — smooth S-curve shape at normal speed.
+   ZVD is bypassed during jog (see motor_controller.c JogStepEngage).         */
 
 /* --- Pick & Place ---------------------------------------------------------*/
 #define P2P_INDEX_COUNT         72u     /* 72 slots × 5° = 360° workspace                     */
