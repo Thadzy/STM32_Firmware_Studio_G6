@@ -335,6 +335,12 @@ void LPUART1_IRQHandler(void)
 }
 
 /* USER CODE BEGIN 1 */
+extern FDCAN_HandleTypeDef hfdcan1;
+void FDCAN1_IT0_IRQHandler(void)
+{
+    HAL_FDCAN_IRQHandler(&hfdcan1);
+}
+
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
 {
     if (htim->Instance != TIM6) return;

@@ -49,15 +49,15 @@ static void debounce_update(Debounce_t *d, bool raw)
 
 void HwIo_Init(void)
 {
-    /* E-stop: NO switch wired to VCC.  Explicitly set PULLDOWN so pin is always
-       defined regardless of CubeMX config.
-       Open (normal) → PULLDOWN holds pin LOW → inactive.
-       Pressed (closes to VCC) → pin HIGH → active (matches GPIO_PIN_SET check). */
+    /* E-stop: NC switch wired to GND.  Explicitly set PULLUP so pin is pulled
+       HIGH when contact opens.
+       Closed (normal) → switch pulls pin LOW → inactive.
+       Pressed (opens/floats) → PULLUP pulls pin HIGH → active. */
     {
         GPIO_InitTypeDef g = {0};
         g.Pin   = E_Stop_Pin;
         g.Mode  = GPIO_MODE_INPUT;
-        g.Pull  = GPIO_PULLDOWN;
+        g.Pull  = GPIO_PULLUP;
         g.Speed = GPIO_SPEED_FREQ_LOW;
         HAL_GPIO_Init(E_Stop_GPIO_Port, &g);
     }
@@ -91,7 +91,7 @@ void HwIo_Init(void)
         HAL_GPIO_Init(Proximity_Sensor_GPIO_Port, &g);
     }
 
-    /* Reed_Up: NO switch to VCC.  PULLDOWN holds pin LOW when open. */
+    /* Reed switches: NO switch to VCC. PULLDOWN holds pin LOW when open. */
     {
         GPIO_InitTypeDef g = {0};
         g.Pin   = Reed_Up_Pin;
@@ -99,6 +99,14 @@ void HwIo_Init(void)
         g.Pull  = GPIO_PULLDOWN;
         g.Speed = GPIO_SPEED_FREQ_LOW;
         HAL_GPIO_Init(Reed_Up_GPIO_Port, &g);
+    }
+    {
+        GPIO_InitTypeDef g = {0};
+        g.Pin   = Reed_Close_Pin | Reed_Down_Pin | Reed_Open_Pin;
+        g.Mode  = GPIO_MODE_INPUT;
+        g.Pull  = GPIO_PULLDOWN;
+        g.Speed = GPIO_SPEED_FREQ_LOW;
+        HAL_GPIO_Init(GPIOC, &g);
     }
 
     /* PWM: start with 0 % duty so TIM1 CC1 is ready to accept writes */
@@ -108,11 +116,11 @@ void HwIo_Init(void)
 
 void HwIo_Poll100Hz(void)
 {
-    /* E-Stop: active HIGH (PULLDOWN on PA5).
-       Normal = contact open = pulled LOW = inactive.
-       Pressed = contact closes to VCC = HIGH = active.
-       8 consecutive HIGH reads = trigger; one LOW read = immediate clear. */
-    if (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_SET) {
+    /* E-Stop: active LOW (PULLUP on PA5).
+       Normal = contact open = pulled HIGH = inactive.
+       Pressed = contact closes to GND = LOW = active.
+       100 consecutive LOW reads = trigger; one HIGH read = immediate clear. */
+    if (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_RESET) {
         if (s_estop_count < ESTOP_DEBOUNCE_THRESHOLD) {
             s_estop_count++;
         }
@@ -156,9 +164,17 @@ void HwIo_Poll100Hz(void)
     if (s_proximity.state && !s_prox_prev_isr) s_prox_latch = true;
     s_prox_prev_isr = s_proximity.state;
 
-    /* Reset button: active LOW (PULLUP on PA7) */
-    debounce_update(&s_reset_btn,
-        HAL_GPIO_ReadPin(Reset_Btn_GPIO_Port, Reset_Btn_Pin) == GPIO_PIN_RESET);
+    /* Reset button: active LOW (PULLUP on PA7).
+       20-tick (200 ms) debounce rejects motor-PWM EMI false resets.             */
+    {
+        bool raw = (HAL_GPIO_ReadPin(Reset_Btn_GPIO_Port, Reset_Btn_Pin) == GPIO_PIN_RESET);
+        if (raw == s_reset_btn.state) {
+            s_reset_btn.count = 0u;
+        } else if (++s_reset_btn.count >= RESET_BTN_DEBOUNCE_TICKS) {
+            s_reset_btn.state = raw;
+            s_reset_btn.count = 0u;
+        }
+    }
 
     /* Mode switch: active LOW (PULLUP on PA6). Maintained switch — a long
        stable-hold window rejects motor-PWM-switching EMI coupled onto the line. */

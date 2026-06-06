@@ -6,5 +6,6 @@
 
 void App_Init(void);   /* USER CODE BEGIN 2  */
 void App_Run(void);    /* USER CODE BEGIN 3 (while loop) */
+void Dashboard_ParseCommand(const char* cmd);
 
 #endif /* __APP_MAIN_H */

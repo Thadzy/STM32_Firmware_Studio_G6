@@ -9,14 +9,21 @@
 #define OUTER_LOOP_DIVIDER      (CONTROL_LOOP_HZ / OUTER_LOOP_HZ)  /* = 10 */
 
 /* --- Debounce --------------------------------------------------------------*/
-/* E-Stop: 8 × 10 ms = 80 ms consecutive LOW reads required to trigger.
+/* E-Stop: 3 × 10 ms = 30 ms consecutive LOW reads → immediate motor stop.
+   Then ESTOP_VERIFY_MS elapses with motor off (EMI gone); if pin is still
+   LOW → real press → latch FAULT.  If pin went HIGH → EMI noise → resume.
    Clears immediately on a single HIGH read (fail-safe). */
-#define ESTOP_DEBOUNCE_THRESHOLD    8u
+#define ESTOP_DEBOUNCE_THRESHOLD    3u
+#define ESTOP_VERIFY_MS             50u   /* ms to wait with motor off before confirming fault */
 
 /* Mode selector (PA6): a maintained switch, not momentary — a long hold is
    fine and rejects motor-PWM-switching EMI bursts coupled onto the line.
    100 × 10 ms = 1000 ms of stable reading required before the mode flips.    */
 #define MODE_SWITCH_DEBOUNCE_TICKS  100u
+
+/* Reset button (PA7): momentary switch.
+   20 × 10 ms = 200 ms of stable reading required to reject motor-PWM EMI.    */
+#define RESET_BTN_DEBOUNCE_TICKS    20u
 
 /* --- ADC / Current Sensor (WCS1800, ±35 A) ---------------------------------*/
 /* Zero is auto-calibrated at boot (64-sample average while motor is off).
