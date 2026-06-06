@@ -1068,16 +1068,29 @@ void Dashboard_ParseCommand(const char* cmd)
     snprintf(s_dbg, sizeof(s_dbg), "$DASH,ACK,%.30s\r\n", cmd);
     UartDma_SendTelemetry(s_dbg);
 
-    /* Very basic scaffolding for the dashboard commands */
-    if (strncmp(cmd, "LAB1_DECEL", 10) == 0) {
+    float val = 0.0f;
+
+    /* Point-to-Point absolute move */
+    if (strncmp(cmd, "LAB P2P ", 8) == 0) {
+        val = atof(cmd + 8);
         if (RobotState.fsm == STATE_IDLE) {
-            MotorCtrl_SetTarget(MotorCtrl_GetPosition_rad() + deg_to_rad(360.0f));
+            MotorCtrl_SetTarget(deg_to_rad(val) + s_home_offset_rad);
             set_task(0x0008); 
             s_move_start_ms = HAL_GetTick();
             RobotState.fsm = STATE_RUNNING;
             s_run_mode = RUN_POINT;
         }
-    } else if (strncmp(cmd, "LAB2_STEP", 9) == 0) {
+    }
+    /* Tuning Parameter updates */
+    else if (strncmp(cmd, "LAB FF_VEL ", 11) == 0) { TuningParams.ff.velocity = atof(cmd + 11); }
+    else if (strncmp(cmd, "LAB FF_ACC ", 11) == 0) { TuningParams.ff.accel = atof(cmd + 11); }
+    else if (strncmp(cmd, "LAB FF_DIS ", 11) == 0) { TuningParams.ff.disturbance = atof(cmd + 11); }
+    else if (strncmp(cmd, "LAB SC_VMAX ", 12) == 0) { TuningParams.scurve.vmax_rads = atof(cmd + 12); }
+    else if (strncmp(cmd, "LAB SC_AMAX ", 12) == 0) { TuningParams.scurve.amax_rads2 = atof(cmd + 12); }
+    else if (strncmp(cmd, "LAB SC_JMAX ", 12) == 0) { TuningParams.scurve.jmax_rads3 = atof(cmd + 12); }
+    
+    /* Legacy triggers */
+    else if (strncmp(cmd, "LAB1_DECEL", 10) == 0) {
         if (RobotState.fsm == STATE_IDLE) {
             MotorCtrl_SetTarget(MotorCtrl_GetPosition_rad() + deg_to_rad(90.0f));
             set_task(0x0008); 

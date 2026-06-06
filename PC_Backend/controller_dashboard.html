@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -14,9 +15,9 @@
             --border-color: rgba(255, 255, 255, 0.08);
             --text-primary: #f3f4f6;
             --text-secondary: #9ca3af;
-            
-            --accent-cyan: #06b6d4;
-            --accent-cyan-glow: rgba(6, 182, 212, 0.2);
+
+            --accent-cyan: #f97316;
+            --accent-cyan-glow: rgba(249, 115, 22, 0.2);
             --accent-emerald: #10b981;
             --accent-pink: #ec4899;
             --accent-purple: #8b5cf6;
@@ -33,16 +34,16 @@
 
         body {
             font-family: 'Inter', sans-serif;
-            background-color: var(--bg-dark);
+            background-color: #050505;
             color: var(--text-primary);
             min-height: 100vh;
             display: flex;
             flex-direction: column;
             overflow-x: hidden;
-            background-image: 
-                radial-gradient(at 0% 0%, rgba(139, 92, 246, 0.05) 0px, transparent 50%),
-                radial-gradient(at 50% 0%, rgba(6, 182, 212, 0.05) 0px, transparent 50%),
-                radial-gradient(at 100% 100%, rgba(236, 72, 153, 0.03) 0px, transparent 50%);
+            background-image:
+                radial-gradient(at 0% 0%, rgba(139, 92, 246, 0.12) 0px, transparent 60%),
+                radial-gradient(at 100% 0%, rgba(249, 115, 22, 0.12) 0px, transparent 60%),
+                radial-gradient(at 50% 100%, rgba(139, 92, 246, 0.08) 0px, transparent 50%);
         }
 
         header {
@@ -98,12 +99,14 @@
         main {
             flex: 1;
             display: grid;
-            grid-template-columns: 340px 1fr;
+            grid-template-columns: minmax(300px, 1fr) minmax(300px, 1fr) minmax(500px, 2fr);
             gap: 1.5rem;
             padding: 1.5rem 2rem;
             max-width: 1800px;
             margin: 0 auto;
             width: 100%;
+            height: calc(100vh - 80px); /* Fill the screen minus header */
+            overflow: hidden;
         }
 
         .glass-card {
@@ -120,10 +123,21 @@
             border-color: rgba(255, 255, 255, 0.12);
         }
 
-        .left-panel {
+        .column-panel {
             display: flex;
             flex-direction: column;
             gap: 1.5rem;
+            height: 100%;
+            overflow-y: auto;
+            padding-right: 0.5rem; /* Space for scrollbar if needed */
+        }
+
+        .right-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+            height: 100%;
+            overflow: hidden; /* Chart flex-grow will handle sizing */
         }
 
         .section-title {
@@ -178,15 +192,41 @@
             border-radius: 4px;
             text-transform: uppercase;
         }
-        .badge-init { background: rgba(139, 92, 246, 0.15); color: var(--accent-purple); }
-        .badge-homing { background: rgba(245, 158, 11, 0.15); color: var(--accent-yellow); }
-        .badge-idle { background: rgba(156, 163, 175, 0.15); color: var(--text-secondary); }
-        .badge-running { background: rgba(6, 182, 212, 0.15); color: var(--accent-cyan); }
-        .badge-fault { background: rgba(239, 68, 68, 0.15); color: var(--accent-red); animation: blink 1s infinite alternate; }
+
+        .badge-init {
+            background: rgba(139, 92, 246, 0.15);
+            color: var(--accent-purple);
+        }
+
+        .badge-homing {
+            background: rgba(245, 158, 11, 0.15);
+            color: var(--accent-yellow);
+        }
+
+        .badge-idle {
+            background: rgba(156, 163, 175, 0.15);
+            color: var(--text-secondary);
+        }
+
+        .badge-running {
+            background: rgba(6, 182, 212, 0.15);
+            color: var(--accent-cyan);
+        }
+
+        .badge-fault {
+            background: rgba(239, 68, 68, 0.15);
+            color: var(--accent-red);
+            animation: blink 1s infinite alternate;
+        }
 
         @keyframes blink {
-            0% { opacity: 0.6; }
-            100% { opacity: 1; }
+            0% {
+                opacity: 0.6;
+            }
+
+            100% {
+                opacity: 1;
+            }
         }
 
         /* Control inputs */
@@ -379,22 +419,36 @@
         .chart-wrapper {
             flex: 1;
             position: relative;
-            min-height: 0; /* Important for Chart.js inside flex-grow */
+            min-height: 0;
+            /* Important for Chart.js inside flex-grow */
         }
 
         /* Utility classes */
-        .mb-2 { margin-bottom: 0.5rem; }
-        .mt-auto { margin-top: auto; }
-        .text-red { color: var(--accent-red); }
-        .text-emerald { color: var(--accent-emerald); }
+        .mb-2 {
+            margin-bottom: 0.5rem;
+        }
+
+        .mt-auto {
+            margin-top: auto;
+        }
+
+        .text-red {
+            color: var(--accent-red);
+        }
+
+        .text-emerald {
+            color: var(--accent-emerald);
+        }
     </style>
 </head>
+
 <body>
 
     <header>
         <h1><span>Pick & Place Robot</span> // Live Tuning</h1>
         <div style="display: flex; gap: 1rem; align-items: center;">
-            <button class="btn btn-secondary" id="pause-btn" style="width: auto; padding: 0.375rem 1rem;">Pause Graph</button>
+            <button class="btn btn-secondary" id="pause-btn" style="width: auto; padding: 0.375rem 1rem;">Pause
+                Graph</button>
             <div class="connection-status">
                 <div class="status-dot" id="status-dot"></div>
                 <span id="status-text">Disconnected</span>
@@ -403,12 +457,14 @@
     </header>
 
     <main>
-        <div class="left-panel">
+        <!-- Column 1: Status, Test, and Logs -->
+        <div class="column-panel">
             <!-- Stats -->
             <div class="glass-card">
                 <div class="section-title">Robot Status</div>
                 <div class="stats-grid">
-                    <div class="stat-box full-width" style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 1rem;">
+                    <div class="stat-box full-width"
+                        style="display: flex; justify-content: space-between; align-items: center; padding: 0.5rem 1rem;">
                         <span style="font-size: 0.75rem; color: var(--text-secondary);">FSM STATE</span>
                         <span class="badge badge-idle" id="fsm-badge">UNKNOWN</span>
                     </div>
@@ -420,16 +476,58 @@
                         <div class="stat-label">VELOCITY</div>
                         <div class="stat-value" id="stat-vel">0.0°/s</div>
                     </div>
-                    <div class="stat-box full-width" style="padding: 0.5rem; font-size: 0.75rem; color: var(--text-secondary);" id="stat-fault-box">
+                    <div class="stat-box full-width"
+                        style="padding: 0.5rem; font-size: 0.75rem; color: var(--text-secondary);" id="stat-fault-box">
                         Fault: <span id="stat-fault-desc" class="text-emerald">None</span>
                     </div>
                 </div>
             </div>
 
+            <!-- Jog panel / Quick Test -->
+            <div class="glass-card">
+                <div class="section-title">Quick Test Command</div>
+                <div class="control-group">
+                    <div class="jog-grid">
+                        <button class="btn btn-secondary" id="jog-ccw-btn">◀ CW</button>
+                        <div style="display: flex; flex-direction: column; align-items: center;">
+                            <input type="number" class="number-input" id="jog-step-input" value="15" style="width: 55px; font-weight:600;">
+                            <span style="font-size: 0.65rem; color: var(--text-secondary); margin-top:2px;">degrees</span>
+                        </div>
+                        <button class="btn btn-secondary" id="jog-cw-btn">CCW ▶</button>
+                    </div>
+                </div>
+                
+                <div class="control-group" style="margin-top: 1rem; border-top: 1px solid var(--border-color); padding-top: 1rem;">
+                    <label>Point-to-Point Target</label>
+                    <div class="slider-container">
+                        <input type="number" class="number-input" id="p2p-tgt-input" value="90.0" step="0.1" style="width: 100px;">
+                        <span style="font-size: 0.75rem; color: var(--text-secondary);">degrees</span>
+                        <button class="btn" id="go-p2p-btn" style="flex: 1; padding: 0.375rem;">GO</button>
+                    </div>
+                </div>
+
+                <div class="button-row" style="margin-top: 1rem;">
+                    <button class="btn btn-stop" id="stop-btn">Soft Stop</button>
+                    <button class="btn btn-secondary" id="gohome-btn">Go Home</button>
+                </div>
+            </div>
+
+            <!-- Performance Log -->
+            <div class="glass-card" style="flex-grow: 1; display: flex; flex-direction: column; min-height: 150px;">
+                <div class="section-title">Performance Log</div>
+                <div id="perf-log"
+                    style="flex-grow: 1; overflow-y: auto; background: #181f30; border: 1px solid var(--border-color); border-radius: 8px; padding: 0.5rem; font-family: monospace; font-size: 0.75rem; color: #a1a1aa;">
+                    <div style="color: var(--text-secondary);">Waiting for first move...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Column 2: Tuning -->
+        <div class="column-panel">
             <!-- Tuning Pane -->
             <div class="glass-card">
                 <div class="section-title">Interactive PID Tuning</div>
-                
+
                 <div class="control-group">
                     <label>Target Loop</label>
                     <select class="select-input" id="loop-select">
@@ -442,7 +540,8 @@
                     <label>Proportional Gain (Kp) <span class="unit-val" id="kp-val">0.000</span></label>
                     <div class="slider-container">
                         <input type="range" class="slider-input" id="kp-slider" min="0" max="10" step="0.001" value="0">
-                        <input type="number" class="number-input" id="kp-num" min="0" max="10" step="0.001" value="0.000">
+                        <input type="number" class="number-input" id="kp-num" min="0" max="10" step="0.001"
+                            value="0.000">
                     </div>
                 </div>
 
@@ -450,7 +549,8 @@
                     <label>Integral Gain (Ki) <span class="unit-val" id="ki-val">0.000</span></label>
                     <div class="slider-container">
                         <input type="range" class="slider-input" id="ki-slider" min="0" max="5" step="0.001" value="0">
-                        <input type="number" class="number-input" id="ki-num" min="0" max="5" step="0.001" value="0.000">
+                        <input type="number" class="number-input" id="ki-num" min="0" max="5" step="0.001"
+                            value="0.000">
                     </div>
                 </div>
 
@@ -458,39 +558,63 @@
                     <label>Derivative Gain (Kd) <span class="unit-val" id="kd-val">0.000</span></label>
                     <div class="slider-container">
                         <input type="range" class="slider-input" id="kd-slider" min="0" max="2" step="0.001" value="0">
-                        <input type="number" class="number-input" id="kd-num" min="0" max="2" step="0.001" value="0.000">
+                        <input type="number" class="number-input" id="kd-num" min="0" max="2" step="0.001"
+                            value="0.000">
                     </div>
                 </div>
 
-                <button class="btn" id="apply-btn">Apply Gains</button>
+                <button class="btn" id="apply-btn">Apply PID Gains</button>
             </div>
 
-            <!-- Jog panel -->
-            <div class="glass-card mt-auto">
-                <div class="section-title">Quick Test Command</div>
-                <div class="control-group">
-                    <div class="jog-grid">
-                        <button class="btn btn-secondary" id="jog-ccw-btn">◀ CW</button>
-                        <div style="display: flex; flex-direction: column; align-items: center;">
-                            <input type="number" class="number-input" id="jog-step-input" value="15" style="width: 55px; font-weight:600;">
-                            <span style="font-size: 0.65rem; color: var(--text-secondary); margin-top:2px;">degrees</span>
-                        </div>
-                        <button class="btn btn-secondary" id="jog-cw-btn">CCW ▶</button>
-                    </div>
-                </div>
-                <div class="button-row">
-                    <button class="btn btn-stop" id="stop-btn">Soft Stop</button>
-                    <button class="btn btn-secondary" id="gohome-btn">Go Home</button>
-                </div>
-            </div>
-
-            <!-- Performance Log -->
+            <!-- Feedforward & S-Curve Tuning -->
             <div class="glass-card">
-                <div class="section-title">Performance Log</div>
-                <div id="perf-log" style="height: 150px; overflow-y: auto; background: #181f30; border: 1px solid var(--border-color); border-radius: 8px; padding: 0.5rem; font-family: monospace; font-size: 0.75rem; color: #a1a1aa;">
-                    <div style="color: var(--text-secondary);">Waiting for first move...</div>
+                <div class="section-title">Feedforward & Limits</div>
+
+                <div class="control-group">
+                    <label>Velocity FF (PWM / rad/s) <span class="unit-val" id="ff-vel-val">3.030</span></label>
+                    <div class="slider-container">
+                        <input type="number" class="number-input" id="ff-vel-num" min="0" max="10" step="0.001"
+                            value="3.030" style="width:100%">
+                    </div>
                 </div>
+
+                <div class="control-group">
+                    <label>Accel FF (PWM / rad/s²) <span class="unit-val" id="ff-acc-val">0.100</span></label>
+                    <div class="slider-container">
+                        <input type="number" class="number-input" id="ff-acc-num" min="0" max="1" step="0.001"
+                            value="0.100" style="width:100%">
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <label>Disturbance FF (PWM) <span class="unit-val" id="ff-dis-val">0.000</span></label>
+                    <div class="slider-container">
+                        <input type="number" class="number-input" id="ff-dis-num" min="0" max="2" step="0.001"
+                            value="0.000" style="width:100%">
+                    </div>
+                </div>
+
+                <hr style="border:0; border-top:1px solid var(--border-color); margin: 10px 0;">
+
+                <div class="control-group">
+                    <label>V_max (rad/s) <span class="unit-val" id="sc-vmax-val">7.304</span></label>
+                    <div class="slider-container">
+                        <input type="number" class="number-input" id="sc-vmax-num" min="1" max="20" step="0.001"
+                            value="7.304" style="width:100%">
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <label>A_max (rad/s²) <span class="unit-val" id="sc-amax-val">27.49</span></label>
+                    <div class="slider-container">
+                        <input type="number" class="number-input" id="sc-amax-num" min="1" max="100" step="0.01"
+                            value="27.49" style="width:100%">
+                    </div>
+                </div>
+
+                <button class="btn btn-secondary" id="apply-ff-btn" style="margin-top: 10px;">Apply FF & Limits</button>
             </div>
+
         </div>
 
         <!-- Right charts panel -->
@@ -500,10 +624,22 @@
                 <div class="chart-header">
                     <div class="chart-title">Position Tracking Profile</div>
                     <div class="chart-legend">
-                        <div class="legend-item"><div class="legend-dot" style="background: var(--accent-purple);"></div><span>S-Curve Tgt</span></div>
-                        <div class="legend-item"><div class="legend-dot" style="background: var(--accent-pink);"></div><span>S-Curve Cmd</span></div>
-                        <div class="legend-item"><div class="legend-dot" style="background: var(--accent-cyan);"></div><span>ZVD Shaped</span></div>
-                        <div class="legend-item"><div class="legend-dot" style="background: var(--accent-emerald);"></div><span>Kalman Actual</span></div>
+                        <div class="legend-item">
+                            <div class="legend-dot" style="background: var(--accent-purple);"></div><span>S-Curve
+                                Tgt</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-dot" style="background: var(--accent-pink);"></div><span>S-Curve
+                                Cmd</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-dot" style="background: var(--accent-cyan);"></div><span>ZVD
+                                Shaped</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-dot" style="background: var(--accent-emerald);"></div><span>Kalman
+                                Actual</span>
+                        </div>
                     </div>
                 </div>
                 <div class="chart-wrapper" id="posChart"></div>
@@ -514,8 +650,14 @@
                 <div class="chart-header">
                     <div class="chart-title">Velocity Tracking Profile</div>
                     <div class="chart-legend">
-                        <div class="legend-item"><div class="legend-dot" style="background: var(--accent-cyan);"></div><span>Velocity Cmd</span></div>
-                        <div class="legend-item"><div class="legend-dot" style="background: var(--accent-emerald);"></div><span>Kalman Actual</span></div>
+                        <div class="legend-item">
+                            <div class="legend-dot" style="background: var(--accent-cyan);"></div><span>Velocity
+                                Cmd</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-dot" style="background: var(--accent-emerald);"></div><span>Kalman
+                                Actual</span>
+                        </div>
                     </div>
                 </div>
                 <div class="chart-wrapper" id="velChart"></div>
@@ -526,9 +668,18 @@
                 <div class="chart-header">
                     <div class="chart-title">PWM Command & PID Integrals</div>
                     <div class="chart-legend">
-                        <div class="legend-item"><div class="legend-dot" style="background: var(--accent-cyan);"></div><span>Pos Integral</span></div>
-                        <div class="legend-item"><div class="legend-dot" style="background: var(--accent-yellow);"></div><span>Spd Integral</span></div>
-                        <div class="legend-item"><div class="legend-dot" style="background: var(--accent-orange);"></div><span>Motor PWM</span></div>
+                        <div class="legend-item">
+                            <div class="legend-dot" style="background: var(--accent-cyan);"></div><span>Pos
+                                Integral</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-dot" style="background: var(--accent-yellow);"></div><span>Spd
+                                Integral</span>
+                        </div>
+                        <div class="legend-item">
+                            <div class="legend-dot" style="background: var(--accent-orange);"></div><span>Motor
+                                PWM</span>
+                        </div>
                     </div>
                 </div>
                 <div class="chart-wrapper" id="pwmChart"></div>
@@ -551,7 +702,7 @@
         const statVel = document.getElementById('stat-vel');
         const statFaultDesc = document.getElementById('stat-fault-desc');
         const statFaultBox = document.getElementById('stat-fault-box');
-        
+
         // Tuning controls
         const loopSelect = document.getElementById('loop-select');
         const kpSlider = document.getElementById('kp-slider');
@@ -569,9 +720,21 @@
         const jogCcwBtn = document.getElementById('jog-ccw-btn');
         const jogCwBtn = document.getElementById('jog-cw-btn');
         const jogStepInput = document.getElementById('jog-step-input');
+
+        const p2pInput = document.getElementById('p2p-tgt-input');
+        const goP2pBtn = document.getElementById('go-p2p-btn');
+
         const stopBtn = document.getElementById('stop-btn');
         const gohomeBtn = document.getElementById('gohome-btn');
         const pauseBtn = document.getElementById('pause-btn');
+
+        // FF & Limits UI
+        const applyFfBtn = document.getElementById('apply-ff-btn');
+        const ffVelNum = document.getElementById('ff-vel-num');
+        const ffAccNum = document.getElementById('ff-acc-num');
+        const ffDisNum = document.getElementById('ff-dis-num');
+        const scVmaxNum = document.getElementById('sc-vmax-num');
+        const scAmaxNum = document.getElementById('sc-amax-num');
 
         // Chart definitions
         const maxPoints = 250; // rolling window size (2.5s of data)
@@ -684,7 +847,7 @@
             const loop = parseInt(loopSelect.value);
             const gains = activeGains[loop];
             syncTuningInputs(gains.kp, gains.ki, gains.kd);
-            
+
             // Query current gains by telling the robot to switch loop
             // which prompts the firmware to write the gains into registers
             sendWsMessage({ action: 'write_reg', reg: 0x36, val: loop });
@@ -725,18 +888,37 @@
             sendWsMessage({ action: 'write_reg', reg: 0x39, val: kiRaw });      // KI
             sendWsMessage({ action: 'write_reg', reg: 0x3A, val: kdRaw });      // KD
             sendWsMessage({ action: 'write_reg', reg: 0x33, val: 2 });          // AT_CMD = 2 (APPLY_GAINS)
-            
+
             // Instantly update activeGains cache locally
             activeGains[loop] = { kp: kpRaw / 1000.0, ki: kiRaw / 1000.0, kd: kdRaw / 1000.0 };
-            console.log(`Applied gains: Loop ${loop} | Kp=${kpRaw/1000} Ki=${kiRaw/1000} Kd=${kdRaw/1000}`);
+            console.log(`Applied gains: Loop ${loop} | Kp=${kpRaw / 1000} Ki=${kiRaw / 1000} Kd=${kdRaw / 1000}`);
         });
+
+        // Apply FF & Limits handler
+        if (applyFfBtn) {
+            applyFfBtn.addEventListener('click', () => {
+                const vel = parseFloat(ffVelNum.value).toFixed(3);
+                const acc = parseFloat(ffAccNum.value).toFixed(3);
+                const dis = parseFloat(ffDisNum.value).toFixed(3);
+                const vmax = parseFloat(scVmaxNum.value).toFixed(3);
+                const amax = parseFloat(scAmaxNum.value).toFixed(3);
+
+                sendWsMessage({ action: 'cmd', cmd: `LAB FF_VEL ${vel}` });
+                sendWsMessage({ action: 'cmd', cmd: `LAB FF_ACC ${acc}` });
+                sendWsMessage({ action: 'cmd', cmd: `LAB FF_DIS ${dis}` });
+                sendWsMessage({ action: 'cmd', cmd: `LAB SC_VMAX ${vmax}` });
+                sendWsMessage({ action: 'cmd', cmd: `LAB SC_AMAX ${amax}` });
+
+                console.log(`Applied FF: Vel=${vel} Acc=${acc} Dis=${dis} | SCurve: Vmax=${vmax} Amax=${amax}`);
+            });
+        }
 
         // Jog triggers (note sign inversion to match GUI coordinate systems)
         jogCcwBtn.addEventListener('click', () => {
             const deg = parseInt(jogStepInput.value);
             if (!isNaN(deg)) {
                 // CW = negative step size in GUI, which is positive in firmware
-                const step = -deg; 
+                const step = -deg;
                 sendWsMessage({ action: 'write_reg', reg: 0x05, val: step });
                 sendWsMessage({ action: 'write_reg', reg: 0x01, val: 2 }); // Mode 2 = JOG
             }
@@ -746,11 +928,20 @@
             const deg = parseInt(jogStepInput.value);
             if (!isNaN(deg)) {
                 // CCW = positive step size in GUI, which is negative in firmware
-                const step = deg; 
+                const step = deg;
                 sendWsMessage({ action: 'write_reg', reg: 0x05, val: step });
                 sendWsMessage({ action: 'write_reg', reg: 0x01, val: 2 }); // Mode 2 = JOG
             }
         });
+
+        if (goP2pBtn) {
+            goP2pBtn.addEventListener('click', () => {
+                const tgt = parseFloat(p2pInput.value);
+                if (!isNaN(tgt)) {
+                    sendWsMessage({ action: 'cmd', cmd: `LAB P2P ${tgt.toFixed(1)}` });
+                }
+            });
+        }
 
         stopBtn.addEventListener('click', () => {
             sendWsMessage({ action: 'write_reg', reg: 0x25, val: 1 }); // Soft stop
@@ -809,7 +1000,7 @@
                 console.log('Connected to serial bridge WebSocket');
                 statusDot.classList.add('connected');
                 statusText.textContent = 'Connected';
-                
+
                 // Query current active gains for loop 0 (velocity) on connection
                 setTimeout(() => {
                     sendWsMessage({ action: 'write_reg', reg: 0x36, val: 0 });
@@ -856,7 +1047,7 @@
             if (!currentMove) {
                 currentMove = { tgt: tgt, startPos: p_act, startTime: tick, maxDev: 0, shpDone: false, settleTime: 0, deadbandTicks: 0 };
             }
-            
+
             // New move detected
             if (Math.abs(tgt - currentMove.tgt) > 0.05) {
                 let dist = Math.abs(currentMove.tgt - currentMove.startPos);
@@ -867,24 +1058,24 @@
                 }
                 currentMove = { tgt: tgt, startPos: p_act, startTime: tick, maxDev: 0, shpDone: false, settleTime: 0, deadbandTicks: 0 };
             }
-            
+
             // Track Overshoot (deviation past target)
             let dev = 0;
             if (tgt > currentMove.startPos && p_act > tgt) dev = p_act - tgt;
             if (tgt < currentMove.startPos && p_act < tgt) dev = currentMove.tgt - p_act;
             if (dev > currentMove.maxDev) currentMove.maxDev = dev;
-            
+
             // Check if S-curve done
             if (!currentMove.shpDone && Math.abs(shp - tgt) < 0.01) {
                 currentMove.shpDone = true;
                 currentMove.shpDoneTime = tick;
             }
-            
+
             // Track Settling Time
             if (currentMove.shpDone && currentMove.settleTime === 0) {
                 let dist = Math.abs(currentMove.tgt - currentMove.startPos);
                 let threshold = Math.max(dist * 0.01, 0.2); // 1% or 0.2 degrees
-                
+
                 if (Math.abs(p_act - tgt) <= threshold) {
                     currentMove.deadbandTicks++;
                     if (currentMove.deadbandTicks >= 50) { // 500ms stable
@@ -923,16 +1114,16 @@
                 // Format: $CTRL,tick,tgt,pos,shp,p_act,p_err,v_cmd,v_act,v_err,pwm,pos_i,spd_i
                 const p = line.split(',');
                 if (p.length >= 13) {
-                    const tick  = parseInt(p[1]);
-                    const tgt   = parseInt(p[2]) / 10.0;
-                    const pos   = parseInt(p[3]) / 10.0;
-                    const shp   = parseInt(p[4]) / 10.0;
+                    const tick = parseInt(p[1]);
+                    const tgt = parseInt(p[2]) / 10.0;
+                    const pos = parseInt(p[3]) / 10.0;
+                    const shp = parseInt(p[4]) / 10.0;
                     const p_act = parseInt(p[5]) / 100.0;
                     const p_err = parseInt(p[6]) / 100.0;
                     const v_cmd = parseInt(p[7]) / 10.0;
                     const v_act = parseInt(p[8]) / 10.0;
                     const v_err = parseInt(p[9]) / 10.0;
-                    const pwm   = parseInt(p[10]) / 10.0;
+                    const pwm = parseInt(p[10]) / 10.0;
                     const pos_i = parseInt(p[11]) / 10.0;
                     const spd_i = parseInt(p[12]) / 10.0;
 
@@ -1026,4 +1217,5 @@
         connect();
     </script>
 </body>
+
 </html>

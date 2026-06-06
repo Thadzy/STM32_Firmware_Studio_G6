@@ -580,6 +580,11 @@ async def _ws_handler(ws, path=None) -> None:
                         if DEBUG:
                             desc = _REG_NAMES.get(reg, f'reg0x{reg:02X}')
                             print(f"[ws] Client {addr} write reg 0x{reg:02X} ({desc}) = {val}")
+                elif action == "cmd":
+                    cmd_str = data.get("cmd", "")
+                    if cmd_str:
+                        _to_robot.put(cmd_str.encode('ascii') + b'\r\n')
+                        if DEBUG: print(f"[ws] Client {addr} sent string cmd: {cmd_str}")
             except Exception as e:
                 print(f"[ws] Error parsing client message: {e}")
     except websockets.exceptions.ConnectionClosed:

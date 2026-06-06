@@ -86,6 +86,12 @@ static void handle_fc03(const uint8_t *req)
     resp[2] = (uint8_t)(count * 2u);
     for (uint16_t i = 0; i < count; i++) {
         uint16_t v   = s_regs[start + i];
+
+        /* Force PC to always read YA heartbeat so serial bridge HI proxy doesn't cause faults */
+        if ((start + i) == 0x00) {
+            v = HB_YA;
+        }
+
         resp[3 + i*2]     = (uint8_t)(v >> 8);
         resp[3 + i*2 + 1] = (uint8_t)(v & 0xFFu);
     }
