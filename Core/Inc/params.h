@@ -108,7 +108,7 @@
 #define KALMAN_R_POS            2e-6f       /* measurement noise — position   */
 
 /* --- Position settling window ----------------------------------------------*/
-#define POSITION_DEADBAND_RAD   0.0175f     /* ≈ 1° — IsAtTarget threshold    */
+#define POSITION_DEADBAND_RAD   0.0017f     /* ≈ 0.1° — IsAtTarget threshold    */
 #define VELOCITY_SETTLED_RADS   0.05f       /* rad/s — near-stop threshold    */
 
 /* --- Software Safety Stack -------------------------------------------------*/
@@ -148,7 +148,7 @@
    To shift working 0° further by N°, subtract N from this value.
    Example: measured −3.12°, want extra +10° working offset → set −13.12°.
    Adjust reg 0x32 (int16 degrees) for small per-session fine-tuning.          */
-#define HOME_OFFSET_DEG         (-4.658f)   /* degrees from sensor center to physical home */
+#define HOME_OFFSET_DEG         0.0f   /* degrees from sensor center to physical home */
 #define HOMING_WIGGLE_MAX_DEG   180.0f  /* max search range from start before FAULT            */
 #define HOMING_OVERSHOOT_DEG         5.0f   /* min deg past edge A before even checking for clear  */
 #define HOMING_OVERSHOOT_MAX_DEG    45.0f   /* abort if sensor never clears within this travel     */
