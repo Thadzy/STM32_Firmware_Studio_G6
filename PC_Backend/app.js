@@ -203,7 +203,29 @@ function processPacket(packet) {
                 syncTuning('input-pos-kd', kd);
             }
         }
-    } else if (parts[0] === 'DASH' || parts[0] === 'HOM' || parts[0] === 'AUTO') {
+    } else if (parts[0] === 'HOM') {
+        // e.g. $HOM,EA1,1234,0,POS,1234
+        if (parts.length >= 6) {
+            const tag = parts[1];
+            const v1 = (parseFloat(parts[2]) / 100).toFixed(2);
+            const v2 = (parseFloat(parts[3]) / 100).toFixed(2);
+            const pos = (parseFloat(parts[5]) / 100).toFixed(2);
+            
+            let msg = `[HOMING] ${tag} - Pos: ${pos}°`;
+            if (tag === 'FST') msg = `[HOMING] Fast search hit sensor at ${pos}°`;
+            else if (tag === 'BAK') msg = `[HOMING] Backed off to ${pos}°`;
+            else if (tag === 'EA1') msg = `[HOMING] Edge A found at ${pos}°`;
+            else if (tag === 'OVS') msg = `[HOMING] Cleared sensor at ${pos}°`;
+            else if (tag === 'EB1') msg = `[HOMING] Edge B found at ${pos}° (Edge A: ${v1}°)`;
+            else if (tag === 'CTR') msg = `[HOMING] Center calculated at ${v1}° (Width: ${v2}°)`;
+            else if (tag === 'CEND') msg = `[HOMING] Arrived at center ${v1}°`;
+            else if (tag === 'ZERO') msg = `[HOMING] Zeroed coordinates! Optical Center: ${v1}° -> Motor Pos: ${pos}°`;
+            
+            log(msg, "success");
+        } else {
+            log("FW: " + packet);
+        }
+    } else if (parts[0] === 'DASH' || parts[0] === 'AUTO') {
         // Informational packets — log but don't parse further
         log("FW: " + packet);
     } else {
