@@ -21,11 +21,12 @@ void     UartDma_SetUsart3RxCb(UartRxCb_t cb);
                       safe to call from Tick100Hz (TIM6 ISR context)         */
 bool     UartDma_SendModbus(const uint8_t *data, uint16_t len);
 bool     UartDma_SendTelemetry(const char *str);
-bool     UartDma_SendTelemetry_T(uint32_t ts_ms,
-                                  int16_t pos_x10,
-                                  int16_t vel_x10,
-                                  int16_t acc_x10,
-                                  int16_t co_x10);
+bool UartDma_SendTelemetry_T(uint32_t ts_ms,
+                              int16_t pos_x10,
+                              int16_t vel_x10,
+                              int16_t acc_x10,
+                              int16_t co_x10,
+                              int16_t vel_set_x10);
 
 /* TX — USART3 (joystick/ESP32) */
 bool     UartDma_SendJoystick(const uint8_t *data, uint16_t len);

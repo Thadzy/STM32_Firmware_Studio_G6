@@ -128,10 +128,14 @@ function processPacket(packet) {
         if (parts.length >= 6) {
             state.currentPos = (parseFloat(parts[2]) || 0) / 10.0;  // degrees
             // Firmware sends vel/acc in rad/s × 10; convert to deg/s for dashboard
-            const RAD2DEG = 180.0 / Math.PI;
-            state.vel = ((parseFloat(parts[3]) || 0) / 10.0) * RAD2DEG;  // deg/s
-            state.acc = ((parseFloat(parts[4]) || 0) / 10.0) * RAD2DEG;  // deg/s²
+            // Firmware sends vel/acc in rad/s × 10; convert to RPM for dashboard
+            const RAD2RPM = 60.0 / (2.0 * Math.PI);
+            state.vel = ((parseFloat(parts[3]) || 0) / 10.0) * RAD2RPM;  // RPM
+            state.acc = ((parseFloat(parts[4]) || 0) / 10.0) * RAD2RPM;  // RPM/s²
             state.pwm = (parseFloat(parts[5]) || 0) / 10.0;
+            if (parts.length >= 7) {
+                state.velSetpoint = ((parseFloat(parts[6]) || 0) / 10.0) * RAD2RPM;
+            }
         }
     } else if (parts[0] === 'ST') {
         if (parts.length >= 4) {
@@ -313,6 +317,7 @@ async function sendCommand(cmd) {
             case "KF_RESET": sendWsMessage({ action: 'cmd', cmd: `LAB KF_RESET 1`}); break;
             case "ZV_WN": sendWsMessage({ action: 'cmd', cmd: `LAB ZV_WN ${val.toFixed(2)}`}); break;
             case "ZV_ZETA": sendWsMessage({ action: 'cmd', cmd: `LAB ZV_ZETA ${val.toFixed(3)}`}); break;
+            case "ZVD_EN": sendWsMessage({ action: 'cmd', cmd: `LAB ZVD_EN ${val}`}); break;
             case "KF_Q_THETA": sendWsMessage({ action: 'cmd', cmd: `LAB KF_Q_TH ${val.toExponential(3)}`}); break;
             case "KF_Q_OMEGA": sendWsMessage({ action: 'cmd', cmd: `LAB KF_Q_W ${val.toExponential(3)}`}); break;
             case "KF_Q_TAU": sendWsMessage({ action: 'cmd', cmd: `LAB KF_Q_TAU ${val.toExponential(3)}`}); break;
@@ -479,7 +484,7 @@ document.getElementById('btn-set-target').addEventListener('click', () => {
     const target = parseFloat(inputTarget.value);
     if (!isNaN(target)) {
         sendCommand(`SET:TARGET=${target}`);
-        if (tuningMode) { tuningState = 'IDLE'; tuningArmRun(); setMetricsStatus('ARMED (Move) — Waiting for motor motion...', ''); }
+        if (tuningMode) { tuningState = 'IDLE'; tuningArmRun(target); setMetricsStatus('ARMED (Move) — Waiting for motor motion...', ''); }
     }
 });
 
@@ -663,6 +668,26 @@ btnPosLoop.addEventListener('click', () => {
 });
 renderPosLoopBtn();
 
+const btnZvd = document.getElementById('btn-zvd');
+let zvdEnabled = true;
+
+function renderZvdBtn() {
+    if (!btnZvd) return;
+    btnZvd.textContent = zvdEnabled ? 'ZVD: ON' : 'ZVD: OFF';
+    btnZvd.classList.toggle('active', zvdEnabled);
+    btnZvd.classList.toggle('danger', !zvdEnabled);
+}
+
+if (btnZvd) {
+    btnZvd.addEventListener('click', () => {
+        zvdEnabled = !zvdEnabled;
+        sendCommand(`SET:ZVD_EN=${zvdEnabled ? 1 : 0}`);
+        renderZvdBtn();
+        log(`ZVD Input Shaper ${zvdEnabled ? 'ENABLED' : 'DISABLED'}`);
+    });
+    renderZvdBtn();
+}
+
 document.getElementById('btn-jog-mode').addEventListener('click', () => {
     const newJog = state.jogMode === 'COARSE' ? 1 : 0;
     sendCommand(`SET:JOG_MODE=${newJog}`);
@@ -777,7 +802,7 @@ document.getElementById('btn-fine-home').addEventListener('click', () => {
 document.getElementById('btn-go-home').addEventListener('click', () => {
     sendCommand("SET:TARGET=0");
     log("Returning to home (0°)");
-    if (tuningMode) { tuningState = 'IDLE'; tuningArmRun(); setMetricsStatus('ARMED (Go Home) — Waiting for motor motion...', ''); }
+    if (tuningMode) { tuningState = 'IDLE'; tuningArmRun(0); setMetricsStatus('ARMED (Go Home) — Waiting for motor motion...', ''); }
 });
 
 document.getElementById('send-tuning-btn').addEventListener('click', () => {
@@ -895,10 +920,10 @@ let TUNE_SETTLE_MS = 3000;  // ms to confirm settled
 let tuningVelPeak = 0;
 let tuningVelSetPeak = 0;
 
-function tuningArmRun() {
+function tuningArmRun(targetOverride) {
     if (!tuningMode) return;
     tuningState = 'ARMED';
-    tuningMoveTarget = state.firmwareTarget;
+    tuningMoveTarget = targetOverride !== undefined ? targetOverride : state.firmwareTarget;
     tuningStartPos = state.currentPos;
     tuningVelPeak = 0;
     tuningVelSetPeak = 0;
@@ -922,7 +947,7 @@ function tuningTick() {
     if (!tuningMode || tuningState === 'IDLE' || tuningState === 'DONE') return;
 
     const vel = Math.abs(state.vel);
-    const posErr = Math.abs(state.currentPos - state.firmwareTarget);
+    const posErr = Math.abs(state.currentPos - tuningMoveTarget);
     const now = Date.now();
 
     // Feed data to tuning charts
@@ -941,10 +966,9 @@ function tuningTick() {
 
     switch (tuningState) {
         case 'ARMED':
-            if (vel > TUNE_VEL_THRESHOLD) {
+            if (vel > TUNE_VEL_THRESHOLD || Math.abs(state.currentPos - tuningStartPos) > 1.0) {
                 tuningState = 'CAPTURING';
                 tuningStartTime = now;
-                tuningMoveTarget = state.firmwareTarget;
                 tuningStartPos = state.currentPos;
                 tuningDir = (tuningMoveTarget - tuningStartPos) >= 0 ? 1 : -1;
                 // Reset chart runs so t=0 begins at motor start (absolute/relative target)
@@ -961,6 +985,9 @@ function tuningTick() {
                 tuningState = 'SETTLING';
                 tuningSettleStart = now;
                 setMetricsStatus('SETTLING...', 'settling');
+            } else if (now - tuningStartTime > 15000) {
+                // Auto-timeout after 15 seconds if it never settles
+                tuningFinalize(now);
             }
             break;
 
@@ -983,7 +1010,8 @@ function tuningFinalize(now) {
     const velRunData = chartVel.currentRun;
 
     // Settle time = elapsed from motor start to entering settle zone
-    const settleTimeSec = (tuningSettleStart - tuningStartTime) / 1000;
+    let settleTimeSec = (tuningSettleStart - tuningStartTime) / 1000;
+    if (tuningSettleStart === 0 || settleTimeSec < 0) settleTimeSec = 15.0; // Timeout fallback
 
     // Pos overshoot: chart vals are already in relative space (target = relTarget)
     let posOver = 0;

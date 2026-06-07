@@ -1062,6 +1062,7 @@ static void fsm_run(void)
    Public entry points
    ========================================================================= */
 
+
 void Dashboard_ParseCommand(const char* cmd)
 {
     /* Acknowledge receipt of the dashboard command */
@@ -1097,6 +1098,7 @@ void Dashboard_ParseCommand(const char* cmd)
     else if (strncmp(cmd, "LAB KF_R ", 9) == 0) { TuningParams.kalman.r_pos = atof(cmd + 9); }
     
     /* Safety Checks toggle */
+    else if (strncmp(cmd, "LAB ZVD_EN ", 11) == 0) { MotorCtrl_SetZvdBypass(atoi(cmd + 11) == 0); }
     else if (strncmp(cmd, "LAB SAFE_STALL ", 15) == 0) { RobotState.dbg.safety.en_tracking_safety = (atoi(cmd + 15) != 0); }
     else if (strncmp(cmd, "LAB SAFE_ENC ", 13) == 0) { RobotState.dbg.safety.en_encoder_health = (atoi(cmd + 13) != 0); }
     else if (strncmp(cmd, "LAB SAFE_OVER ", 14) == 0) { /* Wire-twist is always-on soft-limit watchdog */ }

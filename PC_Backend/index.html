@@ -327,32 +327,36 @@
                         <h4>PID Speed Loop</h4>
                         <div class="input-row">
                             <div class="input-group"><label>Kp</label><input type="number" id="input-speed-kp"
-                                    step="0.01" value="1.0"></div>
-                            <div class="input-group"><label>Ki</label><input type="number" id="input-speed-ki"
                                     step="0.01" value="2.0"></div>
+                            <div class="input-group"><label>Ki</label><input type="number" id="input-speed-ki"
+                                    step="0.01" value="5.0"></div>
                         </div>
                         <div class="input-row">
                             <div class="input-group"><label>Kd</label><input type="number" id="input-speed-kd"
-                                    step="0.001" value="0.0"></div>
+                                    step="0.01" value="0.0"></div>
                             <div class="input-group"><label>K_vff [V/(rad/s)]</label><input type="number"
-                                    id="input-k-vff" step="0.001" value="0"></div>
+                                    id="input-speed-vff" step="0.01" value="0"></div>
+                        </div>
+                        <div class="input-row">
                             <div class="input-group"><label>K_aff [V/(rad/s²)]</label><input type="number"
-                                    id="input-k-aff" step="0.001" value="0"></div>
+                                    id="input-speed-aff" step="0.001" value="0"></div>
                         </div>
                     </div>
 
                     <div class="tuning-section">
                         <div class="section-head-row">
                             <h4>PID Position Loop</h4>
-                            <button id="btn-pos-loop" class="toggle-btn active"
-                                title="Disable to tune the velocity loop in isolation. Trajectory generator still runs and feeds the velocity loop directly.">Loop:
-                                ON</button>
+                            <div>
+                                <button id="btn-zvd" class="toggle-btn active" title="Enable/Disable ZVD Input Shaper">ZVD: ON</button>
+                                <button id="btn-pos-loop" class="toggle-btn active"
+                                    title="Disable to tune the velocity loop in isolation. Trajectory generator still runs and feeds the velocity loop directly.">Loop: ON</button>
+                            </div>
                         </div>
                         <div class="input-row">
-                            <div class="input-group"><label>Kp</label><input type="number" id="input-pos-kp" step="0.1"
-                                    value="0.4"></div>
+                            <div class="input-group"><label>Kp</label><input type="number" id="input-pos-kp" step="0.01"
+                                    value="1.5"></div>
                             <div class="input-group"><label>Ki</label><input type="number" id="input-pos-ki" step="0.01"
-                                    value="0.05"></div>
+                                    value="0.1"></div>
                             <div class="input-group"><label>Kd</label><input type="number" id="input-pos-kd" step="0.01"
                                     value="0.1"></div>
                         </div>

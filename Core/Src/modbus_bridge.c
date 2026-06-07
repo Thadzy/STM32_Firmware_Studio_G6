@@ -6,6 +6,7 @@
 #include "params.h"
 #include "main.h"
 #include "app_main.h"
+#include "app_main.h"
 #include <string.h>
 #include <stdio.h>
 #include <math.h>

@@ -47,12 +47,12 @@ void Kalman_Update(KalmanState_t *k, float pos_meas_rad)
         FP[2][j] = P[2][j] + KF_DT*P[3][j];
         FP[3][j] = P[3][j];
     }
-    /* Step 2: P = FP * F' (F' lower-triangular) */
+    /* Step 2: P = FP * F^T (F^T is lower-triangular) */
     for (int i = 0; i < 4; i++) {
-        P[i][0] = FP[i][0];
-        P[i][1] = FP[i][0]*KF_DT  + FP[i][1];
-        P[i][2] = FP[i][0]*KF_DT2 + FP[i][1]*KF_DT  + FP[i][2];
-        P[i][3] = FP[i][0]*KF_DT3 + FP[i][1]*KF_DT2 + FP[i][2]*KF_DT + FP[i][3];
+        P[i][0] = FP[i][0] + FP[i][1]*KF_DT + FP[i][2]*KF_DT2 + FP[i][3]*KF_DT3;
+        P[i][1] = FP[i][1] + FP[i][2]*KF_DT + FP[i][3]*KF_DT2;
+        P[i][2] = FP[i][2] + FP[i][3]*KF_DT;
+        P[i][3] = FP[i][3];
     }
     /* Add process noise Q (diagonal) */
     P[0][0] += TuningParams.kalman.q_pos;

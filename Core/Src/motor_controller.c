@@ -552,9 +552,13 @@ void MotorCtrl_Tick1kHz(void)
     if (fabsf(u_ff) < (float)MOTOR_PWM_MAX - 1.0f) {
         s_spd_integral += vel_err * DT_INNER;
     }
-    /* Clamp integral */
-    if (s_spd_integral >  PID_SPEED_IMAX) s_spd_integral =  PID_SPEED_IMAX;
-    if (s_spd_integral < -PID_SPEED_IMAX) s_spd_integral = -PID_SPEED_IMAX;
+    /* Clamp integral so its maximum PWM contribution is PID_SPEED_IMAX */
+    float max_integral = PID_SPEED_IMAX;
+    if (TuningParams.spd_pid.ki > 0.001f) {
+        max_integral = PID_SPEED_IMAX / TuningParams.spd_pid.ki;
+    }
+    if (s_spd_integral >  max_integral) s_spd_integral =  max_integral;
+    if (s_spd_integral < -max_integral) s_spd_integral = -max_integral;
 
     float der = (vel_err - s_spd_prev_err) / DT_INNER;
     s_spd_prev_err = vel_err;
@@ -790,8 +794,10 @@ void MotorCtrl_Tick100Hz(void)
     /* Position deadband: if error is within ±POS_DEADBAND_RAD, treat as zero.
        Without this the PID produces a sub-1-count PWM that lroundf truncates
        to 0, the integral slowly winds, then kicks 1 PWM count which overshoots,
-       causing 1° stick-slip hunting indefinitely around the target.            */
-    if (fabsf(pos_err) < POSITION_DEADBAND_RAD) {
+       causing 1° stick-slip hunting indefinitely around the target.
+       Only apply deadband when S-curve is done and ZVD is flushed. */
+    bool zvd_flushed = TuningParams.zvd.bypass || (s_settle_ticks >= ZVD_T3_STEPS);
+    if (s_sc.done && zvd_flushed && fabsf(pos_err) < POSITION_DEADBAND_RAD) {
         s_vel_sp = 0.0f;
         s_acc_sp = 0.0f;
         /* Do not integrate inside the deadband — prevents windup while parked */
@@ -807,9 +813,13 @@ void MotorCtrl_Tick100Hz(void)
         dynamic_ki *= 25.0f; /* Winds up in ~400ms instead of 10s */
     }
 
-    s_pos_integral += pos_err * DT_OUTER;
-    if (s_pos_integral >  PID_POS_IMAX) s_pos_integral =  PID_POS_IMAX;
-    if (s_pos_integral < -PID_POS_IMAX) s_pos_integral = -PID_POS_IMAX;
+    if (s_sc.done) {
+        s_pos_integral += pos_err * DT_OUTER;
+        if (s_pos_integral >  PID_POS_IMAX) s_pos_integral =  PID_POS_IMAX;
+        if (s_pos_integral < -PID_POS_IMAX) s_pos_integral = -PID_POS_IMAX;
+    } else {
+        s_pos_integral = 0.0f;
+    }
 
     float d_meas = -(pos_actual - s_pos_prev_meas) * (float)OUTER_LOOP_HZ;
     s_pos_prev_meas = pos_actual;
@@ -839,7 +849,8 @@ send_telemetry:
         int16_t vel_x10 = (int16_t)lroundf(s_kalman.x[1] * 10.0f);
         int16_t acc_x10 = (int16_t)lroundf(s_kalman.x[2] * 10.0f);
         int16_t co_x10  = (int16_t)(RobotState.motion.motor_pwm * 10);
-        if (!UartDma_SendTelemetry_T(HAL_GetTick(), pos_x10, vel_x10, acc_x10, co_x10)) {
+        int16_t vel_set_x10 = (int16_t)lroundf(s_vel_sp * 10.0f);
+        if (!UartDma_SendTelemetry_T(HAL_GetTick(), pos_x10, vel_x10, acc_x10, co_x10, vel_set_x10)) {
             RobotState.comms.telemetry_drops++;
         }
 
