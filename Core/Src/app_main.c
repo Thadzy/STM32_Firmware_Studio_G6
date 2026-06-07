@@ -351,7 +351,7 @@ static void homing_run(void)
                 MotorCtrl_Stop();
 #endif
             }
-        } else if (fabsf(pos - s_backoff_start_rad) >= deg_to_rad(HOMING_BACKOFF_DEG)) {
+        } else if (((pos - s_backoff_start_rad) * (float)s_sweep_dir) >= deg_to_rad(HOMING_BACKOFF_DEG)) {
             /* Fully clear + margin — reverse into sensor at PRECISION vel.  */
             s_sweep_dir        = -s_sweep_dir; /* back toward sensor          */
             s_search_start_rad = pos;
