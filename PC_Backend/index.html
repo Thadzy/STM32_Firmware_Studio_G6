@@ -235,6 +235,53 @@
                     </div>
 
                     <div class="test-panel-grid">
+                        
+                        <!-- BASE SYSTEM TEST MODE -->
+                        <div class="test-group" style="border: 1px solid var(--accent-orange); background: rgba(249, 115, 22, 0.05); padding: 1rem; border-radius: 8px; margin-bottom: 1rem; grid-column: 1 / -1;">
+                            <h4 style="color: var(--accent-orange); border-bottom: 1px solid rgba(249, 115, 22, 0.2); padding-bottom: 0.5rem; margin-bottom: 0.75rem; display: flex; justify-content: space-between; align-items: center;">
+                                Base System Test Mode
+                                <span style="font-size: 0.65rem; color: var(--text-secondary); font-weight: normal; text-transform: none;">Native Hardware Oscillation</span>
+                            </h4>
+                            
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem;">
+                                <!-- Precision -->
+                                <div style="background: rgba(0,0,0,0.2); padding: 0.75rem; border-radius: 6px; border: 1px solid rgba(139, 92, 246, 0.3);">
+                                    <h5 style="color: var(--accent-purple); font-size: 0.75rem; margin-bottom: 0.5rem; margin-top: 0;">PRECISION TEST</h5>
+                                    <div class="test-btn-row" style="margin-bottom: 0.75rem; gap: 0.5rem;">
+                                        <div style="display: flex; flex-direction: column; gap: 2px;">
+                                            <label style="font-size: 0.6rem; color: var(--text-secondary);">Init Idx</label>
+                                            <input type="number" id="prec-init" value="1" style="width: 100%;" />
+                                        </div>
+                                        <div style="display: flex; flex-direction: column; gap: 2px;">
+                                            <label style="font-size: 0.6rem; color: var(--text-secondary);">Target Idx</label>
+                                            <input type="number" id="prec-target" value="5" style="width: 100%;" />
+                                        </div>
+                                        <div style="display: flex; flex-direction: column; gap: 2px;">
+                                            <label style="font-size: 0.6rem; color: var(--text-secondary);">Repeats</label>
+                                            <input type="number" id="prec-repeats" value="10" style="width: 100%;" />
+                                        </div>
+                                    </div>
+                                    <button id="btn-start-prec" class="primary-btn sm" style="width: 100%; background: var(--accent-purple);">▶ Start Precision Test</button>
+                                </div>
+                                
+                                <!-- Performance -->
+                                <div style="background: rgba(0,0,0,0.2); padding: 0.75rem; border-radius: 6px; border: 1px solid rgba(6, 182, 212, 0.3);">
+                                    <h5 style="color: var(--accent-cyan); font-size: 0.75rem; margin-bottom: 0.5rem; margin-top: 0;">PERFORMANCE TEST (Endless Loop)</h5>
+                                    <div class="test-btn-row" style="margin-bottom: 0.75rem; gap: 0.5rem;">
+                                        <div style="display: flex; flex-direction: column; gap: 2px;">
+                                            <label style="font-size: 0.6rem; color: var(--text-secondary);">Max Vel (rad/s)</label>
+                                            <input type="number" id="perf-vel" value="15" style="width: 100%;" />
+                                        </div>
+                                        <div style="display: flex; flex-direction: column; gap: 2px;">
+                                            <label style="font-size: 0.6rem; color: var(--text-secondary);">Max Acc (rad/s²)</label>
+                                            <input type="number" id="perf-acc" value="40" style="width: 100%;" />
+                                        </div>
+                                    </div>
+                                    <button id="btn-start-perf" class="primary-btn sm" style="width: 100%; background: var(--accent-cyan);">▶ Start Performance Test</button>
+                                </div>
+                            </div>
+                        </div>
+
                         <div class="test-group">
                             <h4>Hardware Tests</h4>
                             <div class="test-btn-grid">
@@ -677,6 +724,44 @@
     <script src="charts.js"></script>
     <script src="app.js"></script>
     <script src="testing.js"></script>
+    <script>
+        // --- BASE SYSTEM TEST MODE HANDLERS ---
+        const btnPrec = document.getElementById('btn-start-prec');
+        if (btnPrec) {
+            btnPrec.addEventListener('click', () => {
+                const init = parseInt(document.getElementById('prec-init').value) || 1;
+                const target = parseInt(document.getElementById('prec-target').value) || 5;
+                const repeats = parseInt(document.getElementById('prec-repeats').value) || 10;
+                
+                // Base System Modbus sequence for Precision Test
+                if (typeof sendWsMessage === 'function') {
+                    sendWsMessage({ action: 'write_reg', reg: 0x01, val: 16 }); // Mode 16 (Test)
+                    sendWsMessage({ action: 'write_reg', reg: 0x06, val: 0 });  // Precision Test
+                    sendWsMessage({ action: 'write_reg', reg: 0x09, val: init });
+                    sendWsMessage({ action: 'write_reg', reg: 0x10, val: target });
+                    sendWsMessage({ action: 'write_reg', reg: 0x11, val: repeats }); // Triggers the test
+                    console.log('Started Base System Precision Test');
+                }
+            });
+        }
+
+        const btnPerf = document.getElementById('btn-start-perf');
+        if (btnPerf) {
+            btnPerf.addEventListener('click', () => {
+                const vel = parseInt(document.getElementById('perf-vel').value) || 15;
+                const acc = parseInt(document.getElementById('perf-acc').value) || 40;
+                
+                // Base System Modbus sequence for Performance Test
+                if (typeof sendWsMessage === 'function') {
+                    sendWsMessage({ action: 'write_reg', reg: 0x01, val: 16 }); // Mode 16 (Test)
+                    sendWsMessage({ action: 'write_reg', reg: 0x06, val: 1 });  // Performance Test
+                    sendWsMessage({ action: 'write_reg', reg: 0x07, val: vel });
+                    sendWsMessage({ action: 'write_reg', reg: 0x08, val: acc }); // Triggers the test
+                    console.log('Started Base System Performance Test');
+                }
+            });
+        }
+    </script>
 </body>
 
 </html>
