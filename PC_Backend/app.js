@@ -1038,17 +1038,19 @@ function tuningTick() {
             if (posErr < TUNE_POS_SETTLE_DEG && vel < TUNE_VEL_SETTLE_RPM) {
                 tuningState = 'SETTLING';
                 tuningSettleStart = now;
-                setMetricsStatus('SETTLING...', 'settling');
+                setMetricsStatus(`SETTLING... (Err: ${posErr.toFixed(2)}°)`, 'settling');
             } else if (now - tuningStartTime > 15000) {
                 // Auto-timeout after 15 seconds if it never settles
                 tuningFinalize(now);
+            } else {
+                setMetricsStatus(`WAITING TO SETTLE... (Err: ${posErr.toFixed(2)}°)`, 'capturing');
             }
             break;
 
         case 'SETTLING':
             if (posErr > TUNE_POS_SETTLE_DEG || vel > TUNE_VEL_SETTLE_RPM) {
                 tuningState = 'CAPTURING'; // bounced out
-                setMetricsStatus('CAPTURING...', 'capturing');
+                setMetricsStatus(`CAPTURING... (Err: ${posErr.toFixed(2)}°)`, 'capturing');
             } else if (now - tuningSettleStart >= TUNE_SETTLE_MS) {
                 tuningFinalize(now);
             }
