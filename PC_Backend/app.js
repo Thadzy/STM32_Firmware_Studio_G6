@@ -389,6 +389,8 @@ async function sendCommand(cmd) {
         const cmdName = cmd.substring(4);
         if (cmdName === "HOME") {
             sendWsMessage({ action: 'write_reg', reg: 0x01, val: 1 });
+        } else if (cmdName === "FORCE_HOME") {
+            sendWsMessage({ action: 'cmd', cmd: 'LAB FHOME' });
         } else if (cmdName === "SET_HOME") {
             sendWsMessage({ action: 'write_reg', reg: 0x01, val: 8 });
         } else if (cmdName === "ESTOP=1") {
@@ -868,7 +870,7 @@ if (elGripDly) {
 }
 
 document.getElementById('btn-fine-home').addEventListener('click', () => {
-    sendCommand("CMD:HOME");
+    sendCommand("CMD:FORCE_HOME");
     log("Homing sequence triggered");
 });
 

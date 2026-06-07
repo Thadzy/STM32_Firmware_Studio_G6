@@ -1149,6 +1149,10 @@ void Dashboard_ParseCommand(const char* cmd)
     else if (strncmp(cmd, "LAB SAFE_JOY ", 13) == 0) { /* Joy disconnect is automatic when mode=JOYSTICK */ }
     else if (strncmp(cmd, "LAB GRIP_DLY_MS ", 16) == 0) { RobotState.dbg.gripper_delay_ms = atoi(cmd + 16); }
     else if (strncmp(cmd, "LAB GRIP_DLY ", 13) == 0) { RobotState.dbg.gripper_use_delay = (atoi(cmd + 13) != 0); }
+    else if (strncmp(cmd, "LAB FHOME", 9) == 0) { 
+        RobotState.status.is_homed = false; 
+        ModbusBridge_SetReg(0x01, 1); 
+    }
     else if (strncmp(cmd, "LAB1_DECEL", 10) == 0) {
         if (RobotState.fsm == STATE_IDLE) {
             MotorCtrl_SetTarget(MotorCtrl_GetPosition_rad() + deg_to_rad(90.0f));
