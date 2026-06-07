@@ -94,8 +94,8 @@ void Error_Handler(void);
 #define Reset_Btn_GPIO_Port GPIOA
 #define Reed_Up_Pin GPIO_PIN_0
 #define Reed_Up_GPIO_Port GPIOB
-#define Relay_SysStatus_Pin GPIO_PIN_2
-#define Relay_SysStatus_GPIO_Port GPIOB
+#define Relay_SysStatus_Pin GPIO_PIN_9
+#define Relay_SysStatus_GPIO_Port GPIOC
 #define Relay_Sysmode_Pin GPIO_PIN_11
 #define Relay_Sysmode_GPIO_Port GPIOB
 #define Relay_MotorPower_Pin GPIO_PIN_12
