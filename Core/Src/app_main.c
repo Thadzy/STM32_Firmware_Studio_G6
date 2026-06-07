@@ -1141,6 +1141,7 @@ void Dashboard_ParseCommand(const char* cmd)
     else if (strncmp(cmd, "LAB SAFE_ENC ", 13) == 0) { RobotState.dbg.safety.en_encoder_health = (atoi(cmd + 13) != 0); }
     else if (strncmp(cmd, "LAB SAFE_OVER ", 14) == 0) { /* Wire-twist is always-on soft-limit watchdog */ }
     else if (strncmp(cmd, "LAB SAFE_JOY ", 13) == 0) { /* Joy disconnect is automatic when mode=JOYSTICK */ }
+    else if (strncmp(cmd, "LAB GRIP_DLY ", 13) == 0) { RobotState.dbg.gripper_use_delay = (atoi(cmd + 13) != 0); }
     else if (strncmp(cmd, "LAB1_DECEL", 10) == 0) {
         if (RobotState.fsm == STATE_IDLE) {
             MotorCtrl_SetTarget(MotorCtrl_GetPosition_rad() + deg_to_rad(90.0f));

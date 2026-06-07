@@ -376,6 +376,7 @@ async function sendCommand(cmd) {
             case "SAFE_ENCODER": sendWsMessage({ action: 'cmd', cmd: `LAB SAFE_ENC ${val}` }); break;
             case "SAFE_OVERROT": sendWsMessage({ action: 'cmd', cmd: `LAB SAFE_OVER ${val}` }); break;
             case "SAFE_JOY": sendWsMessage({ action: 'cmd', cmd: `LAB SAFE_JOY ${val}` }); break;
+            case "SAFE_GRIPDLY": sendWsMessage({ action: 'cmd', cmd: `LAB GRIP_DLY ${val}` }); break;
             case "JOG_FINE": sendWsMessage({ action: 'cmd', cmd: `LAB JOGF ${val.toFixed(1)}` }); break;
             case "STEP_COARSE": sendWsMessage({ action: 'cmd', cmd: `LAB STEPC ${val.toFixed(1)}` }); break;
             case "STEP_FINE": sendWsMessage({ action: 'cmd', cmd: `LAB STEPF ${val.toFixed(2)}` }); break;
@@ -840,6 +841,7 @@ document.getElementById('fault-modal').addEventListener('click', (e) => {
 
 const SAFETY_TOGGLES = {
     'chk-safe-overrot': 'SAFE_OVERROT',
+    'chk-safe-gripdly': 'SAFE_GRIPDLY',
 };
 Object.entries(SAFETY_TOGGLES).forEach(([id, key]) => {
     const el = document.getElementById(id);

@@ -557,6 +557,20 @@
                             <em>Cause:</em> wire-twist protection — prevents internal wiring from snapping.
                         </div>
                     </details>
+                    <details class="safety-detail">
+                        <summary class="safety-row" style="color: var(--accent-yellow)">
+                            <span><span class="caret">▸</span> Gripper Delay Fallback</span>
+                            <input type="checkbox" id="chk-safe-gripdly" onclick="event.stopPropagation()">
+                        </summary>
+                        <div class="trigger-desc">
+                            <strong>Overrides Reed Switches!</strong>
+                            <ul>
+                                <li>If enabled, firmware ignores physical reed switches.</li>
+                                <li>Uses a strict 500ms time delay to progress sequences.</li>
+                            </ul>
+                            <em>Use Case:</em> Enable this during the demo if the sensor breaks!
+                        </div>
+                    </details>
                 </div>
             </div>
         </div>
