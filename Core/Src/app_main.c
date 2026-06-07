@@ -469,6 +469,9 @@ static void homing_run(void)
             hom_dbg("ZERO", rad_to_deg(center_rad),
                     rad_to_deg(s_user_home_rad),
                     rad_to_deg(current_rad));
+            hom_dbg("ZRO2", rad_to_deg(s_home_offset_rad), 
+                    rad_to_deg(exact_current_rad), 
+                    rad_to_deg(current_rad - center_rad));
             MotorCtrl_Zero(exact_current_rad);
             MotorCtrl_SetZvdBypass(true);   /* keep ZVD off until rod is attached and ZVD params are re-tuned */
             MotorCtrl_SetTarget(s_user_home_rad);

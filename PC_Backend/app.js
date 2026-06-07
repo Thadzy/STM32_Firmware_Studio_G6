@@ -220,6 +220,7 @@ function processPacket(packet) {
             else if (tag === 'CTR') msg = `[HOMING] Center calculated at ${v1}° (Width: ${v2}°)`;
             else if (tag === 'CEND') msg = `[HOMING] Arrived at center ${v1}°`;
             else if (tag === 'ZERO') msg = `[HOMING] Zeroed coordinates! Optical Center: ${v1}° -> Motor Pos: ${pos}°`;
+            else if (tag === 'ZRO2') msg = `[HOMING] (Debug) home_offset=${v1}°, exact=${v2}°, motor_err=${pos}°`;
             
             log(msg, "success");
         } else {
