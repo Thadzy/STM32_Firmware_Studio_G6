@@ -760,7 +760,8 @@ void MotorCtrl_Tick100Hz(void)
     if (s_sc.done && zvd_flushed && fabsf(pos_err) < POSITION_DEADBAND_RAD) {
         s_vel_sp = 0.0f;
         s_acc_sp = 0.0f;
-        /* Do not integrate inside the deadband — prevents windup while parked */
+        /* Clear integral inside the deadband so chatter doesn't trigger a massive frozen integral kick */
+        s_pos_integral = 0.0f;
         s_pos_prev_meas = pos_actual;
         goto send_telemetry;
     }
