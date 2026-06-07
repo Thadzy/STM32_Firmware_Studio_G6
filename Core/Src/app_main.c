@@ -436,7 +436,8 @@ static void homing_run(void)
         bool  timeout = (now - s_center_start_ms) >= HOMING_CENTER_TIMEOUT_MS;
 
         if (close || timeout) {
-            MotorCtrl_Stop();
+            MotorCtrl_SyncTrajectory();
+            MotorCtrl_SetTarget(center);
             hom_dbg("CEND", rad_to_deg(center), rad_to_deg(err), rad_to_deg(pos));
             s_settle_t = now;
             s_hom      = HOM_SETTLE;
