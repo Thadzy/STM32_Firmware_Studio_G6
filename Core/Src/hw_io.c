@@ -114,13 +114,36 @@ void HwIo_Init(void)
     __HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 0u);
 }
 
+static bool read_estop_pin_emi_filtered(void)
+{
+    /* The motor PWM runs at ~20 kHz (50 us period).
+       The maximum duty cycle is capped at 50% (MOTOR_VOLT_LIMIT_PWM), 
+       meaning the PWM is LOW for at most 25 us.
+       If the E-Stop pin is picking up PWM EMI, it will toggle HIGH/LOW.
+       A real human press will hold the pin solidly LOW.
+       By reading the pin twice, spaced 35 us apart, we guarantee that 
+       PWM EMI will be HIGH for at least one of the reads. 
+       If BOTH reads are LOW, it's a genuine solid connection to GND. */
+    if (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_SET) return false;
+    
+    /* Delay ~35 us using DWT cycle counter. 1 us = 170 cycles at 170 MHz. */
+    uint32_t start = DWT->CYCCNT;
+    while ((DWT->CYCCNT - start) < (170u * 35u)) {
+        /* wait */
+    }
+    
+    if (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_SET) return false;
+    
+    return true; /* Solidly LOW across the 35 us window */
+}
+
 void HwIo_Poll100Hz(void)
 {
     /* E-Stop: active LOW (NO to GND, PULLUP on PA5).
        Normal = contact open = pulled HIGH = inactive.
        Pressed = contact closed to GND = LOW = active.
        Consecutive LOW reads = trigger; one HIGH read = immediate clear. */
-    if (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_RESET) {
+    if (read_estop_pin_emi_filtered()) {
         if (s_estop_count < ESTOP_DEBOUNCE_THRESHOLD) {
             s_estop_count++;
         }

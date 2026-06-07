@@ -240,7 +240,8 @@ static void on_rx(const uint8_t *data, uint16_t len)
 {
     /* Check for Dashboard string commands bypassing Modbus */
     if ((len >= 3 && data[0] == 'L' && data[1] == 'A' && data[2] == 'B') ||
-        (len >= 4 && data[0] == 'T' && data[1] == 'E' && data[2] == 'S' && data[3] == 'T')) {
+        (len >= 4 && data[0] == 'T' && data[1] == 'E' && data[2] == 'S' && data[3] == 'T') ||
+        (len >= 3 && data[0] == 'C' && data[1] == 'M' && data[2] == 'D')) {
         char cmd_buf[64] = {0};
         uint16_t copy_len = len < sizeof(cmd_buf) ? len : (sizeof(cmd_buf) - 1);
         memcpy(cmd_buf, data, copy_len);
