@@ -387,6 +387,8 @@ async function sendCommand(cmd) {
         const cmdName = cmd.substring(4);
         if (cmdName === "HOME") {
             sendWsMessage({ action: 'write_reg', reg: 0x01, val: 1 });
+        } else if (cmdName === "SET_HOME") {
+            sendWsMessage({ action: 'write_reg', reg: 0x01, val: 8 });
         } else if (cmdName === "ESTOP=1") {
             sendWsMessage({ action: 'write_reg', reg: 0x25, val: 1 });
         } else if (cmdName === "CLEAR") {
@@ -858,6 +860,11 @@ Object.entries(SAFETY_TOGGLES).forEach(([id, key]) => {
 document.getElementById('btn-fine-home').addEventListener('click', () => {
     sendCommand("CMD:HOME");
     log("Homing sequence triggered");
+});
+
+document.getElementById('btn-set-home').addEventListener('click', () => {
+    sendCommand("CMD:SET_HOME");
+    log("Set Home: Current physical position defined as 0.0°");
 });
 
 document.getElementById('btn-go-home').addEventListener('click', () => {

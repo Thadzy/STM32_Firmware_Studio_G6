@@ -227,7 +227,8 @@ static void handle_fc16(const uint8_t *req, uint16_t len)
 static void on_rx(const uint8_t *data, uint16_t len)
 {
     /* Check for Dashboard string commands bypassing Modbus */
-    if (len >= 3 && data[0] == 'L' && data[1] == 'A' && data[2] == 'B') {
+    if ((len >= 3 && data[0] == 'L' && data[1] == 'A' && data[2] == 'B') ||
+        (len >= 4 && data[0] == 'T' && data[1] == 'E' && data[2] == 'S' && data[3] == 'T')) {
         char cmd_buf[64] = {0};
         uint16_t copy_len = len < sizeof(cmd_buf) ? len : (sizeof(cmd_buf) - 1);
         memcpy(cmd_buf, data, copy_len);

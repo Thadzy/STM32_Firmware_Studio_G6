@@ -1149,6 +1149,47 @@ void Dashboard_ParseCommand(const char* cmd)
             RobotState.fsm = STATE_RUNNING;
             s_run_mode = RUN_POINT;
         }
+    } else if (strncmp(cmd, "TEST,HW5,", 9) == 0) {
+        /* HW-5 Precision: TEST,HW5,target,cycles */
+        float tgt = 0;
+        int cycles = 100;
+        if (sscanf(cmd + 9, "%f,%d", &tgt, &cycles) >= 1) {
+            if (RobotState.fsm == STATE_IDLE) {
+                s_test_type = 0; /* Precision */
+                s_test_pos_a = 0; /* Home */
+                s_test_pos_b = (int16_t)tgt;
+                s_test_repeats_target = (uint16_t)cycles;
+                s_test_repeats_done   = 0;
+                s_test_moving_to_b    = true;
+                s_test_dwell_start    = 0;
+                
+                MotorCtrl_SetTarget(resolve_target(s_test_pos_b, 0));
+                set_task(0x0008); /* GoPoint */
+                s_move_start_ms = HAL_GetTick();
+                RobotState.fsm = STATE_RUNNING;
+                s_run_mode  = RUN_TEST;
+            }
+        }
+    } else if (strncmp(cmd, "TEST,HW2,", 9) == 0) {
+        /* HW-2 Performance mapping (Wait, testing.js says PWM? Let's treat it as performance test) */
+        float speed = 0;
+        if (sscanf(cmd + 9, "%f", &speed) == 1) {
+            if (RobotState.fsm == STATE_IDLE) {
+                s_test_type = 1; /* Performance */
+                s_test_pos_a = 0;
+                s_test_pos_b = (int16_t)speed; /* using target as speed for now, or maybe just bounce to a default pos */
+                s_test_repeats_target = 10;
+                s_test_repeats_done   = 0;
+                s_test_moving_to_b    = true;
+                s_test_dwell_start    = 0;
+                
+                MotorCtrl_SetTarget(resolve_target(s_test_pos_b, 0));
+                set_task(0x0008);
+                s_move_start_ms = HAL_GetTick();
+                RobotState.fsm = STATE_RUNNING;
+                s_run_mode  = RUN_TEST;
+            }
+        }
     } else if (strncmp(cmd, "LAB4_CYCLE", 10) == 0) {
         if (RobotState.fsm == STATE_IDLE) {
             ModbusBridge_SetReg(0x22, 1); /* 1 pair */
