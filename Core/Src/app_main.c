@@ -130,6 +130,8 @@ static uint16_t s_test_repeats_target;
 static uint16_t s_test_repeats_done;
 static int16_t  s_test_pos_a;
 static int16_t  s_test_pos_b;
+static float    s_test_rad_a;
+static float    s_test_rad_b;
 static bool     s_test_moving_to_b;
 static uint32_t s_test_dwell_start;        /* registers 0x12–0x21 = 16 slots = 8 pairs */
 static uint8_t  s_seq_step;    /* current step index (0 = pick of pair 0)   */
@@ -821,6 +823,15 @@ static void fsm_run(void)
 
     uint16_t mode_reg = ModbusBridge_GetReg(0x01);
 
+    /* If the Base System triggered a Test Mode start while we are already running a move,
+       abort the current move immediately so we can fall through to IDLE and start the new test. */
+    if ((mode_reg & 0x10u) && (mode_reg & 0x8000u)) {
+        if (RobotState.fsm == STATE_RUNNING) {
+            MotorCtrl_Stop();
+            RobotState.fsm = STATE_IDLE;
+        }
+    }
+
     switch (RobotState.fsm) {
 
     case STATE_INIT:
@@ -920,7 +931,13 @@ static void fsm_run(void)
             }
 
             uint16_t unit = ModbusBridge_GetReg(0x23);
-            MotorCtrl_SetTarget(resolve_target(s_test_pos_b, unit));
+            /* Resolve absolute radian targets ONCE at the start of the test.
+               This completely prevents the directional logic in resolve_target() 
+               from accumulating revolutions infinitely over many repeats! */
+            s_test_rad_a = resolve_target(s_test_pos_a, unit);
+            s_test_rad_b = resolve_target(s_test_pos_b, unit);
+
+            MotorCtrl_SetTarget(s_test_rad_b);
             
             set_task(0x0008); /* GoPoint */
             s_move_start_ms = HAL_GetTick();
@@ -1022,7 +1039,7 @@ static void fsm_run(void)
                     
                     if (s_test_moving_to_b) {
                         s_test_moving_to_b = false;
-                        MotorCtrl_SetTarget(resolve_target(s_test_pos_a, ModbusBridge_GetReg(0x23)));
+                        MotorCtrl_SetTarget(s_test_rad_a);
                         s_move_start_ms = HAL_GetTick();
                     } else {
                         s_test_moving_to_b = true;
@@ -1039,7 +1056,7 @@ static void fsm_run(void)
                             }
                             break;
                         }
-                        MotorCtrl_SetTarget(resolve_target(s_test_pos_b, ModbusBridge_GetReg(0x23)));
+                        MotorCtrl_SetTarget(s_test_rad_b);
                         s_move_start_ms = HAL_GetTick();
                     }
                 }
