@@ -160,7 +160,7 @@
         if (T.limits) {
             const bits = [];
             if (T.limits.timeMs) bits.push(`stop@${(T.limits.timeMs/1000).toFixed(1)}s`);
-            if (T.limits.settleRpm) bits.push(`settle<${T.limits.settleRpm}RPM`);
+            if (T.limits.settleRpm) bits.push(`settle<${T.limits.settleRpm}rad/s`);
             if (T.limits.decim > 1) bits.push(`1in${T.limits.decim}`);
             dlog('Limits: ' + bits.join(', '));
         }

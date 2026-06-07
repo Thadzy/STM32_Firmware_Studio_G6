@@ -1078,12 +1078,29 @@ void Dashboard_ParseCommand(const char* cmd)
         }
     }
     /* Tuning Parameter updates */
+    else if (strncmp(cmd, "LAB SPD_KP ", 11) == 0) { MotorCtrl_SetPidGains(0, atof(cmd + 11), -1, -1); }
+    else if (strncmp(cmd, "LAB SPD_KI ", 11) == 0) { MotorCtrl_SetPidGains(0, -1, atof(cmd + 11), -1); }
+    else if (strncmp(cmd, "LAB SPD_KD ", 11) == 0) { MotorCtrl_SetPidGains(0, -1, -1, atof(cmd + 11)); }
+    else if (strncmp(cmd, "LAB POS_KP ", 11) == 0) { MotorCtrl_SetPidGains(1, atof(cmd + 11), -1, -1); }
+    else if (strncmp(cmd, "LAB POS_KI ", 11) == 0) { MotorCtrl_SetPidGains(1, -1, atof(cmd + 11), -1); }
+    else if (strncmp(cmd, "LAB POS_KD ", 11) == 0) { MotorCtrl_SetPidGains(1, -1, -1, atof(cmd + 11)); }
     else if (strncmp(cmd, "LAB FF_VEL ", 11) == 0) { TuningParams.ff.velocity = atof(cmd + 11); }
     else if (strncmp(cmd, "LAB FF_ACC ", 11) == 0) { TuningParams.ff.accel = atof(cmd + 11); }
     else if (strncmp(cmd, "LAB FF_DIS ", 11) == 0) { TuningParams.ff.disturbance = atof(cmd + 11); }
     else if (strncmp(cmd, "LAB SC_VMAX ", 12) == 0) { TuningParams.scurve.vmax_rads = atof(cmd + 12); }
     else if (strncmp(cmd, "LAB SC_AMAX ", 12) == 0) { TuningParams.scurve.amax_rads2 = atof(cmd + 12); }
     else if (strncmp(cmd, "LAB SC_JMAX ", 12) == 0) { TuningParams.scurve.jmax_rads3 = atof(cmd + 12); }
+    else if (strncmp(cmd, "LAB GET_GAINS", 13) == 0) {
+        for (uint8_t loop = 0; loop <= 1; loop++) {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "$GAINS,%u,%ld,%ld,%ld\r\n",
+                     loop,
+                     (long)lroundf(MotorCtrl_GetKp(loop) * 1000.0f),
+                     (long)lroundf(MotorCtrl_GetKi(loop) * 1000.0f),
+                     (long)lroundf(MotorCtrl_GetKd(loop) * 1000.0f));
+            UartDma_SendTelemetry(buf);
+        }
+    }
     
     /* Kalman Filter tuning */
     else if (strncmp(cmd, "LAB KF_Q_TH ", 12) == 0) { TuningParams.kalman.q_pos = atof(cmd + 12); }

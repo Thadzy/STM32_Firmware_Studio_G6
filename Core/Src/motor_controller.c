@@ -232,14 +232,14 @@ void MotorCtrl_SetPidGains(uint8_t loop, float kp, float ki, float kd)
        3 × STR instructions ≈ 18 ns at 170 MHz — negligible jitter.         */
     __disable_irq();
     if (loop == 1) { // 1 = Position loop
-        TuningParams.pos_pid.kp   = kp;
-        TuningParams.pos_pid.ki   = ki;
-        TuningParams.pos_pid.kd   = kd;
+        if (kp >= 0.0f) TuningParams.pos_pid.kp   = kp;
+        if (ki >= 0.0f) TuningParams.pos_pid.ki   = ki;
+        if (kd >= 0.0f) TuningParams.pos_pid.kd   = kd;
         s_pos_integral = 0.0f;   /* bumpless transition */
     } else {         // 0 = Velocity loop
-        TuningParams.spd_pid.kp   = kp;
-        TuningParams.spd_pid.ki   = ki;
-        TuningParams.spd_pid.kd   = kd;
+        if (kp >= 0.0f) TuningParams.spd_pid.kp   = kp;
+        if (ki >= 0.0f) TuningParams.spd_pid.ki   = ki;
+        if (kd >= 0.0f) TuningParams.spd_pid.kd   = kd;
         s_spd_integral = 0.0f;
     }
     __enable_irq();

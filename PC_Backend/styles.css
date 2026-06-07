@@ -12,6 +12,19 @@
     --glass-blur: blur(12px);
     --font-main: 'Inter', sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
+    --gradient-secondary: linear-gradient(135deg, #FF8C00, #FF4500);
+    --gradient-third: linear-gradient(135deg, #9400D3, #4B0082);
+    --color-secondary: #FF8C00;
+    --color-third: #9400D3;
+}
+
+[data-theme="light"] {
+    --bg-color: #f0f2f5;
+    --card-bg: rgba(255, 255, 255, 0.85);
+    --accent-cyan: #0099ff;
+    --text-primary: #1a1a1a;
+    --text-secondary: #5a5a5a;
+    --border-color: rgba(0, 0, 0, 0.1);
 }
 
 * {
@@ -87,7 +100,7 @@ header {
     flex: 1;
     padding: 1rem;
     display: grid;
-    grid-template-columns: 280px 1fr 300px;
+    grid-template-columns: 250px 1fr 270px;
     gap: 1rem;
     overflow: hidden;
     height: calc(100vh - 60px);
@@ -161,7 +174,8 @@ header {
 /* Visualizer */
 .canvas-container {
     width: 100%;
-    height: calc(100% - 30px);
+    flex: 1 1 0;
+    min-height: 0;
     display: flex;
     flex-direction: column;
 }
@@ -269,8 +283,8 @@ header {
 }
 
 .legend-item.pos { color: var(--accent-cyan); }
-.legend-item.vel { color: var(--accent-magenta); }
-.legend-item.acc { color: var(--accent-green); }
+.legend-item.vel { color: var(--color-secondary); }
+.legend-item.acc { color: var(--color-third); }
 
 .legend-item {
     display: inline-flex;

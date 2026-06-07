@@ -1,4 +1,5 @@
 // --- State ---
+let chartsFrozen = false;
 const state = {
     connected: false,
     currentPos: 0,
@@ -48,9 +49,9 @@ const visualizer = new RobotVisualizer('robot-visualizer');
 const gripperVisualizer = new GripperVisualizer('gripper-visualizer');
 /* Constructor: (id, color, liveMin, liveMax, tuneMin, tuneMax, absInTuning) */
 /* Constructor: (id, color, liveMin, liveMax, tuneMin, tuneMax, absInTuning) */
-const chartPos = new TelemetryChart('chart-pos', 'cyan', -360, 360, 0, 400, true);
-const chartVel = new TelemetryChart('chart-vel', 'magenta', -100, 100, 0, 100, false);
-const chartAcc = new TelemetryChart('chart-acc', 'yellow', -200, 200);
+const chartPos = new TelemetryChart('chart-pos', 'cyan', -550, 550, 0, 400, true);
+const chartVel = new TelemetryChart('chart-vel', 'magenta', -25, 25, 0, 10, false);
+const chartAcc = new TelemetryChart('chart-acc', 'yellow', -40, 40);
 
 // --- UI Elements ---
 const connectBtn = document.getElementById('connect-btn');
@@ -80,6 +81,7 @@ async function connectSerial() {
         state.connected = true;
         updateUI();
         log("Connected to WebSocket bridge.");
+        sendWsMessage({ action: 'cmd', cmd: 'LAB GET_GAINS' });
     };
     socket.onmessage = (event) => {
         const packets = event.data.split('\n');
@@ -111,30 +113,27 @@ function processPacket(packet) {
         log("RAW PKT: " + packet);
         _dbgPacketCount++;
     }
-    
+
     // Strip leading '$' if present, and trailing '*' (legacy framing)
     if (packet.startsWith('$')) packet = packet.substring(1);
     if (packet.endsWith('*')) packet = packet.substring(0, packet.length - 1);
     packet = packet.trim();
     if (!packet) return;
-    
+
     // The new firmware sends CSV lines instead of Key:Value pairs.
     // e.g. $T,tick,pos*10,vel*10,acc*10,pwm*10
     // e.g. $ST,fsm,run_mode,fault
     const parts = packet.split(',');
     if (parts.length === 0) return;
-    
+
     if (parts[0] === 'T') {
         if (parts.length >= 6) {
             state.currentPos = (parseFloat(parts[2]) || 0) / 10.0;  // degrees
-            // Firmware sends vel/acc in rad/s × 10; convert to deg/s for dashboard
-            // Firmware sends vel/acc in rad/s × 10; convert to RPM for dashboard
-            const RAD2RPM = 60.0 / (2.0 * Math.PI);
-            state.vel = ((parseFloat(parts[3]) || 0) / 10.0) * RAD2RPM;  // RPM
-            state.acc = ((parseFloat(parts[4]) || 0) / 10.0) * RAD2RPM;  // RPM/s²
-            state.pwm = (parseFloat(parts[5]) || 0) / 10.0;
-            if (parts.length >= 7) {
-                state.velSetpoint = ((parseFloat(parts[6]) || 0) / 10.0) * RAD2RPM;
+            // Firmware sends vel/acc in rad/s × 10
+            state.vel = ((parseFloat(parts[3]) || 0) / 10.0);  // rad/s
+            state.acc = ((parseFloat(parts[4]) || 0) / 10.0);  // rad/s²
+            if (parts.length >= 8) {
+                state.velSetpoint = ((parseFloat(parts[6]) || 0) / 10.0);
             }
         }
     } else if (parts[0] === 'ST') {
@@ -142,7 +141,7 @@ function processPacket(packet) {
             const fsm = parseInt(parts[1]) || 0;
             const run_mode = parseInt(parts[2]) || 0;
             const fault = parseInt(parts[3]) || 0;
-            
+
             state.mode = decodeMode(fsm);
             state.fault = decodeFault(fault);
         }
@@ -281,22 +280,26 @@ function processPacket(packet) {
     updateUI();
     visualizer.update(state.currentPos, state.firmwareTarget);
     gripperVisualizer.update(!!state.gripper_ud, !state.gripper_co);
-    chartPos.addData(state.currentPos);
-    chartPos.addTarget(state.firmwareTarget);
-    chartVel.addData(state.vel);
-    chartVel.addTarget(state.velSetpoint);
-    chartAcc.addData(state.acc);
-    chartAcc.addTarget(state.accSetpoint);
 
-    // KF overlays (always pushed; rendering on each chart is unconditional
-    // because the chart class hides empty arrays). When KF is disabled the
-    // estimate is just the open-loop integration with corrections.
-    chartPos.addEstimate(state.kfTheta);
-    chartVel.addEstimate(state.kfOmega);
-    if (state.kfSanityShow) {
-        chartPos.addSanity(state.kfSanityTheta);
-        chartVel.addSanity(state.kfSanityOmega);
+    if (!chartsFrozen) {
+        chartPos.addData(state.currentPos);
+        chartPos.addTarget(state.firmwareTarget);
+        chartVel.addData(state.vel);
+        chartVel.addTarget(state.velSetpoint);
+        chartAcc.addData(state.acc);
+        chartAcc.addTarget(state.accSetpoint);
+
+        // KF overlays (always pushed; rendering on each chart is unconditional
+        // because the chart class hides empty arrays). When KF is disabled the
+        // estimate is just the open-loop integration with corrections.
+        chartPos.addEstimate(state.kfTheta);
+        chartVel.addEstimate(state.kfOmega);
+        if (state.kfSanityShow) {
+            chartPos.addSanity(state.kfSanityTheta);
+            chartVel.addSanity(state.kfSanityOmega);
+        }
     }
+
     updateKalmanCard();
     checkGhostStart();
     tuningTick();
@@ -314,45 +317,45 @@ function sendWsMessage(obj) {
 async function sendCommand(cmd) {
     if (!state.connected || !socket) return;
     log("Sent (Internal): " + cmd);
-    
+
     if (cmd.startsWith("SET:")) {
         const [key, valStr] = cmd.substring(4).split("=");
         const val = parseFloat(valStr);
         if (isNaN(val)) return;
-        
-        switch(key) {
+
+        switch (key) {
             case "TARGET": sendWsMessage({ action: 'cmd', cmd: `LAB P2P ${val.toFixed(1)}` }); break;
-            case "SPEED_KP": sendWsMessage({ action: 'write_reg', reg: 0x36, val: 0 }); sendWsMessage({ action: 'write_reg', reg: 0x38, val: Math.round(val*1000) }); sendWsMessage({ action: 'write_reg', reg: 0x33, val: 2 }); break;
-            case "SPEED_KI": sendWsMessage({ action: 'write_reg', reg: 0x36, val: 0 }); sendWsMessage({ action: 'write_reg', reg: 0x39, val: Math.round(val*1000) }); sendWsMessage({ action: 'write_reg', reg: 0x33, val: 2 }); break;
-            case "SPEED_KD": sendWsMessage({ action: 'write_reg', reg: 0x36, val: 0 }); sendWsMessage({ action: 'write_reg', reg: 0x3A, val: Math.round(val*1000) }); sendWsMessage({ action: 'write_reg', reg: 0x33, val: 2 }); break;
-            case "POS_KP": sendWsMessage({ action: 'write_reg', reg: 0x36, val: 1 }); sendWsMessage({ action: 'write_reg', reg: 0x38, val: Math.round(val*1000) }); sendWsMessage({ action: 'write_reg', reg: 0x33, val: 2 }); break;
-            case "POS_KI": sendWsMessage({ action: 'write_reg', reg: 0x36, val: 1 }); sendWsMessage({ action: 'write_reg', reg: 0x39, val: Math.round(val*1000) }); sendWsMessage({ action: 'write_reg', reg: 0x33, val: 2 }); break;
-            case "POS_KD": sendWsMessage({ action: 'write_reg', reg: 0x36, val: 1 }); sendWsMessage({ action: 'write_reg', reg: 0x3A, val: Math.round(val*1000) }); sendWsMessage({ action: 'write_reg', reg: 0x33, val: 2 }); break;
-            case "K_VFF": sendWsMessage({ action: 'cmd', cmd: `LAB FF_VEL ${val.toFixed(3)}`}); break;
-            case "K_AFF": sendWsMessage({ action: 'cmd', cmd: `LAB FF_ACC ${val.toFixed(3)}`}); break;
-            case "V_MAX_RAD": sendWsMessage({ action: 'cmd', cmd: `LAB SC_VMAX ${val.toFixed(3)}`}); break;
-            case "A_MAX_RAD": sendWsMessage({ action: 'cmd', cmd: `LAB SC_AMAX ${val.toFixed(3)}`}); break;
-            case "J_MAX_RAD": sendWsMessage({ action: 'cmd', cmd: `LAB SC_JMAX ${val.toFixed(0)}`}); break;
-            case "MIN_PWM": sendWsMessage({ action: 'cmd', cmd: `LAB SC_MINPWM ${val.toFixed(2)}`}); break;
-            case "HOME_SPEED": sendWsMessage({ action: 'cmd', cmd: `LAB HOME_SPD ${val.toFixed(1)}`}); break;
+            case "SPEED_KP": sendWsMessage({ action: 'cmd', cmd: `LAB SPD_KP ${val.toFixed(3)}` }); break;
+            case "SPEED_KI": sendWsMessage({ action: 'cmd', cmd: `LAB SPD_KI ${val.toFixed(3)}` }); break;
+            case "SPEED_KD": sendWsMessage({ action: 'cmd', cmd: `LAB SPD_KD ${val.toFixed(3)}` }); break;
+            case "POS_KP": sendWsMessage({ action: 'cmd', cmd: `LAB POS_KP ${val.toFixed(3)}` }); break;
+            case "POS_KI": sendWsMessage({ action: 'cmd', cmd: `LAB POS_KI ${val.toFixed(3)}` }); break;
+            case "POS_KD": sendWsMessage({ action: 'cmd', cmd: `LAB POS_KD ${val.toFixed(3)}` }); break;
+            case "K_VFF": sendWsMessage({ action: 'cmd', cmd: `LAB FF_VEL ${val.toFixed(3)}` }); break;
+            case "K_AFF": sendWsMessage({ action: 'cmd', cmd: `LAB FF_ACC ${val.toFixed(3)}` }); break;
+            case "V_MAX_RAD": sendWsMessage({ action: 'cmd', cmd: `LAB SC_VMAX ${val.toFixed(3)}` }); break;
+            case "A_MAX_RAD": sendWsMessage({ action: 'cmd', cmd: `LAB SC_AMAX ${val.toFixed(3)}` }); break;
+            case "J_MAX_RAD": sendWsMessage({ action: 'cmd', cmd: `LAB SC_JMAX ${val.toFixed(0)}` }); break;
+            case "MIN_PWM": sendWsMessage({ action: 'cmd', cmd: `LAB SC_MINPWM ${val.toFixed(2)}` }); break;
+            case "HOME_SPEED": sendWsMessage({ action: 'cmd', cmd: `LAB HOME_SPD ${val.toFixed(1)}` }); break;
             case "JOG_MODE": sendWsMessage({ action: 'write_reg', reg: 0x01, val: 2 }); break; // 2 = Jog mode
-            case "KF_EN": sendWsMessage({ action: 'cmd', cmd: `LAB KF_EN ${val}`}); break;
-            case "KF_RESET": sendWsMessage({ action: 'cmd', cmd: `LAB KF_RESET 1`}); break;
-            case "ZV_WN": sendWsMessage({ action: 'cmd', cmd: `LAB ZV_WN ${val.toFixed(2)}`}); break;
-            case "ZV_ZETA": sendWsMessage({ action: 'cmd', cmd: `LAB ZV_ZETA ${val.toFixed(3)}`}); break;
-            case "ZVD_EN": sendWsMessage({ action: 'cmd', cmd: `LAB ZVD_EN ${val}`}); break;
-            case "KF_Q_THETA": sendWsMessage({ action: 'cmd', cmd: `LAB KF_Q_TH ${val.toExponential(3)}`}); break;
-            case "KF_Q_OMEGA": sendWsMessage({ action: 'cmd', cmd: `LAB KF_Q_W ${val.toExponential(3)}`}); break;
-            case "KF_Q_TAU": sendWsMessage({ action: 'cmd', cmd: `LAB KF_Q_TAU ${val.toExponential(3)}`}); break;
-            case "KF_Q_I": sendWsMessage({ action: 'cmd', cmd: `LAB KF_Q_I ${val.toExponential(3)}`}); break;
-            case "KF_R": sendWsMessage({ action: 'cmd', cmd: `LAB KF_R ${val.toExponential(3)}`}); break;
-            case "SAFE_STALL": sendWsMessage({ action: 'cmd', cmd: `LAB SAFE_STALL ${val}`}); break;
-            case "SAFE_ENCODER": sendWsMessage({ action: 'cmd', cmd: `LAB SAFE_ENC ${val}`}); break;
-            case "SAFE_OVERROT": sendWsMessage({ action: 'cmd', cmd: `LAB SAFE_OVER ${val}`}); break;
-            case "SAFE_JOY": sendWsMessage({ action: 'cmd', cmd: `LAB SAFE_JOY ${val}`}); break;
-            case "JOG_FINE": sendWsMessage({ action: 'cmd', cmd: `LAB JOGF ${val.toFixed(1)}`}); break;
-            case "STEP_COARSE": sendWsMessage({ action: 'cmd', cmd: `LAB STEPC ${val.toFixed(1)}`}); break;
-            case "STEP_FINE": sendWsMessage({ action: 'cmd', cmd: `LAB STEPF ${val.toFixed(2)}`}); break;
+            case "KF_EN": sendWsMessage({ action: 'cmd', cmd: `LAB KF_EN ${val}` }); break;
+            case "KF_RESET": sendWsMessage({ action: 'cmd', cmd: `LAB KF_RESET 1` }); break;
+            case "ZV_WN": sendWsMessage({ action: 'cmd', cmd: `LAB ZV_WN ${val.toFixed(2)}` }); break;
+            case "ZV_ZETA": sendWsMessage({ action: 'cmd', cmd: `LAB ZV_ZETA ${val.toFixed(3)}` }); break;
+            case "ZVD_EN": sendWsMessage({ action: 'cmd', cmd: `LAB ZVD_EN ${val}` }); break;
+            case "KF_Q_THETA": sendWsMessage({ action: 'cmd', cmd: `LAB KF_Q_TH ${val.toExponential(3)}` }); break;
+            case "KF_Q_OMEGA": sendWsMessage({ action: 'cmd', cmd: `LAB KF_Q_W ${val.toExponential(3)}` }); break;
+            case "KF_Q_TAU": sendWsMessage({ action: 'cmd', cmd: `LAB KF_Q_TAU ${val.toExponential(3)}` }); break;
+            case "KF_Q_I": sendWsMessage({ action: 'cmd', cmd: `LAB KF_Q_I ${val.toExponential(3)}` }); break;
+            case "KF_R": sendWsMessage({ action: 'cmd', cmd: `LAB KF_R ${val.toExponential(3)}` }); break;
+            case "SAFE_STALL": sendWsMessage({ action: 'cmd', cmd: `LAB SAFE_STALL ${val}` }); break;
+            case "SAFE_ENCODER": sendWsMessage({ action: 'cmd', cmd: `LAB SAFE_ENC ${val}` }); break;
+            case "SAFE_OVERROT": sendWsMessage({ action: 'cmd', cmd: `LAB SAFE_OVER ${val}` }); break;
+            case "SAFE_JOY": sendWsMessage({ action: 'cmd', cmd: `LAB SAFE_JOY ${val}` }); break;
+            case "JOG_FINE": sendWsMessage({ action: 'cmd', cmd: `LAB JOGF ${val.toFixed(1)}` }); break;
+            case "STEP_COARSE": sendWsMessage({ action: 'cmd', cmd: `LAB STEPC ${val.toFixed(1)}` }); break;
+            case "STEP_FINE": sendWsMessage({ action: 'cmd', cmd: `LAB STEPF ${val.toFixed(2)}` }); break;
             default:
                 console.warn("Unknown SET command:", key);
                 break;
@@ -446,19 +449,19 @@ function decodeMode(val) {
 }
 
 function decodeFault(val) {
-    const bits = parseInt(val);
-    if (bits === 0) return 'NONE';
-    const f = [];
-    if (bits & 0x001) f.push('STALL');
-    if (bits & 0x002) f.push('ENCODER');
-    if (bits & 0x004) f.push('JOY_LOST');
-    if (bits & 0x008) f.push('OVER_ROT');
-    if (bits & 0x010) f.push('ESTOP_HW');
-    if (bits & 0x020) f.push('PROX_LOST');
-    if (bits & 0x040) f.push('ESTOP_JOY');
-    if (bits & 0x080) f.push('ESTOP_DASH');
-    if (bits & 0x100) f.push('ESTOP_MBUS');
-    return f.join(' | ');
+    const code = parseInt(val);
+    if (code === 0) return 'NONE';
+    switch (code) {
+        case 1: return 'ESTOP_HW';
+        case 2: return 'HOMING_ERR_EDGE';
+        case 3: return 'HOMING_ERR_CLEAR';
+        case 4: return 'HOMING_ERR_SWEEP';
+        case 5: return 'HOMING_TIMEOUT';
+        case 16: return 'ESTOP_JOY';
+        case 32: return 'PC_LINK_LOST';
+        case 65: return 'OVER_ROT';
+        default: return 'UNKNOWN_' + code;
+    }
 }
 
 // --- Event Listeners ---
@@ -666,7 +669,7 @@ function startSine() {
     sineCapturing = true;
     const btn = document.getElementById('btn-sine-toggle');
     if (btn) { btn.textContent = 'Stop Sine'; btn.classList.add('danger'); }
-    log(`Sine generator ON — ${amp} RPM @ ${freq} Hz`);
+    log(`Sine generator ON — ${amp} rad/s @ ${freq} Hz`);
 }
 document.getElementById('btn-sine-toggle').addEventListener('click', () => {
     sineActive ? stopSine() : startSine();
@@ -726,18 +729,31 @@ btnOverride.addEventListener('click', () => {
 
 // --- Fault Modal ---
 const FAULT_INFO = {
-    /* Automatic faults (gated by safety_config) */
-    'STALL': { name: 'Motor Stalled', desc: 'PWM high but rotor not moving for 2 s. Source: automatic safety monitor. Check obstruction or wiring.' },
-    'ENCODER': { name: 'Encoder Error', desc: 'Encoder signal lost or phase inverted. Source: automatic safety monitor. Check encoder cable.' },
-    'JOY_LOST': { name: 'Joystick Lost', desc: 'ESP32 joystick disconnected. Source: automatic safety monitor (Joystick Check).' },
-    'OVER_ROT': { name: 'Over-Rotation', desc: 'Exceeded ±720° from home. Source: soft-limit watchdog (wire-twist protection).' },
-    /* User / external e-stop sources (informational; not gated by safety_config) */
-    'ESTOP_HW': { name: 'E-Stop: Physical', desc: 'Hardware E-Stop button was pressed (GPIO EXTI). Release the button and press the physical Reset.' },
-    'PROX_LOST': { name: 'Proximity Lost', desc: 'Proximity sensor reported open. Source: physical interlock.' },
-    'ESTOP_JOY': { name: 'E-Stop: Joystick', desc: 'E-Stop triggered by the joystick safety button (P) or command (X). Source: ESP32 joystick.' },
-    'ESTOP_DASH': { name: 'E-Stop: Dashboard', desc: 'EMERGENCY STOP button on the dashboard was clicked. Source: user via dashboard.' },
-    'ESTOP_MBUS': { name: 'E-Stop: Modbus', desc: 'Modbus register 0x25 requested soft stop. Source: Base System / Modbus master.' },
+    'ESTOP_HW': { name: 'E-Stop: Physical', desc: 'Hardware E-Stop button was pressed on the base. Clear the physical button and reset.' },
+    'HOMING_ERR_EDGE': { name: 'Homing Failed', desc: 'Edge A not found during homing sequence.' },
+    'HOMING_ERR_CLEAR': { name: 'Homing Failed', desc: 'Sensor never cleared during homing sequence. Check for obstruction.' },
+    'HOMING_ERR_SWEEP': { name: 'Homing Failed', desc: 'Sensor not found in sweep during homing sequence. Check sensor alignment.' },
+    'HOMING_TIMEOUT': { name: 'Homing Timeout', desc: 'Overall homing sequence timed out.' },
+    'ESTOP_JOY': { name: 'E-Stop: Joystick', desc: 'E-Stop triggered by ESP32 joystick button.' },
+    'PC_LINK_LOST': { name: 'PC Link Lost', desc: 'Dashboard disconnected or heartbeat timed out.' },
+    'OVER_ROT': { name: 'Over-Rotation', desc: 'Exceeded ±540° from home. Source: soft-limit watchdog (wire-twist protection).' }
 };
+
+const freezeBtn = document.getElementById('btn-freeze-chart');
+if (freezeBtn) {
+    freezeBtn.addEventListener('click', () => {
+        chartsFrozen = !chartsFrozen;
+        if (chartsFrozen) {
+            freezeBtn.classList.add('active');
+            freezeBtn.innerText = 'Unfreeze';
+            freezeBtn.style.background = 'rgba(244, 255, 77, 0.2)';
+        } else {
+            freezeBtn.classList.remove('active');
+            freezeBtn.innerText = 'Freeze';
+            freezeBtn.style.background = 'transparent';
+        }
+    });
+}
 
 function refreshFaultModal() {
     const list = document.getElementById('modal-fault-list');
@@ -798,23 +814,22 @@ document.getElementById('fault-modal').addEventListener('click', (e) => {
 });
 
 const SAFETY_TOGGLES = {
-    'chk-safe-stall': 'SAFE_STALL',
-    'chk-safe-encoder': 'SAFE_ENCODER',
     'chk-safe-overrot': 'SAFE_OVERROT',
-    'chk-safe-joy': 'SAFE_JOY',
 };
 Object.entries(SAFETY_TOGGLES).forEach(([id, key]) => {
     const el = document.getElementById(id);
-    el.addEventListener('change', e => {
-        sendCommand(`SET:${key}=${e.target.checked ? 1 : 0}`);
-    });
-    /* Push current checkbox state to firmware once we're connected — handles
-     * the case where the user unchecked the box, reloaded the dashboard,
-     * and the firmware still has the safety check enabled. */
-    el.addEventListener('click', () => {
-        /* fires after the toggle; redundant SET ensures sync after reload */
-        sendCommand(`SET:${key}=${el.checked ? 1 : 0}`);
-    });
+    if (el) {
+        el.addEventListener('change', e => {
+            sendCommand(`SET:${key}=${e.target.checked ? 1 : 0}`);
+        });
+        /* Push current checkbox state to firmware once we're connected — handles
+         * the case where the user unchecked the box, reloaded the dashboard,
+         * and the firmware still has the safety check enabled. */
+        el.addEventListener('click', () => {
+            /* fires after the toggle; redundant SET ensures sync after reload */
+            sendCommand(`SET:${key}=${el.checked ? 1 : 0}`);
+        });
+    }
 });
 
 document.getElementById('btn-fine-home').addEventListener('click', () => {
@@ -857,15 +872,26 @@ document.getElementById('send-tuning-btn').addEventListener('click', () => {
     for (const [key, id] of Object.entries(params)) {
         sendCommand(`SET:${key}=${document.getElementById(id).value}`);
     }
-    
-    // Velocity Profile dropdown logic
+
     const velProfile = document.getElementById('select-vel-profile').value;
     if (velProfile === 'trap') {
-        sendCommand('SET:J_MAX_RAD=99999'); // Massive jerk makes it a trapezoidal profile
+        sendCommand('SET:J_MAX_RAD=99999');
     } else {
         sendCommand(`SET:J_MAX_RAD=${document.getElementById('input-jmax-rad').value}`);
     }
 });
+
+const themeBtn = document.getElementById('theme-btn');
+if (themeBtn) {
+    themeBtn.addEventListener('click', () => {
+        const body = document.body;
+        if (body.hasAttribute('data-theme')) {
+            body.removeAttribute('data-theme');
+        } else {
+            body.setAttribute('data-theme', 'light');
+        }
+    });
+}
 
 document.getElementById('select-vel-profile').addEventListener('change', (e) => {
     const jmaxGroup = document.getElementById('group-jmax');
@@ -924,9 +950,9 @@ let tuningMetricsHistory = [];
 
 /* Mutable thresholds (configurable via gear icon on Step Response card).
  * Persisted in localStorage so they survive page reloads. */
-let TUNE_VEL_THRESHOLD = 3.0;   // RPM — motor considered moving
-let TUNE_POS_SETTLE_DEG = 2.0;   // degrees — within target = settling
-let TUNE_VEL_SETTLE_RPM = 3.0;   // RPM — velocity settled
+let TUNE_VEL_THRESHOLD = 0.3;   // rad/s — motor considered moving
+let TUNE_POS_SETTLE_DEG = 2.0;  // deg — considered on target
+let TUNE_VEL_SETTLE_RPM = 0.3;   // rad/s — velocity settled
 let TUNE_SETTLE_MS = 3000;  // ms to confirm settled
 
 (function loadMetricsCfg() {

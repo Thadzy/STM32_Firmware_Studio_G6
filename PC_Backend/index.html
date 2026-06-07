@@ -11,6 +11,7 @@
     <link
         href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&display=swap"
         rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/uplot/dist/uPlot.min.css">
 </head>
 
 <body class="dark-theme">
@@ -21,6 +22,7 @@
         </div>
         <div class="header-controls">
             <div id="serial-status" class="status-indicator disconnected">Disconnected</div>
+            <button id="theme-btn" class="secondary-btn" style="width:auto; margin:0;">Toggle Theme</button>
             <button id="connect-btn" class="primary-btn">Connect Robot</button>
             <button id="sim-btn" class="secondary-btn">Simulate Data</button>
             <button id="estop-btn" class="danger-btn">EMERGENCY STOP</button>
@@ -171,6 +173,7 @@
                         <button id="mode-toggle-btn" class="vm-btn active" data-mode="live">Live</button>
                         <button id="mode-tuning-btn" class="vm-btn" data-mode="tuning">Tuning</button>
                         <button id="mode-test-btn" class="vm-btn" data-mode="test">Test</button>
+                        <button id="btn-freeze-chart" class="vm-btn" style="margin-left: 8px; border-color: var(--accent-yellow); color: var(--accent-yellow);">Freeze</button>
                     </div>
                     <div class="chart-legend">
                         <label class="legend-item pos"><input type="checkbox" id="chk-show-pos" checked>Pos</label>
@@ -193,7 +196,7 @@
                     </div>
                     <div class="chart-wrapper" id="wrap-chart-vel">
                         <div class="chart-header-row">
-                            <label>VELOCITY (RPM)</label>
+                            <label>VELOCITY (rad/s)</label>
                             <span class="chart-legend-inline">
                                 <span class="lg-chip lg-actual lg-vel">Raw vel</span>
                                 <span class="lg-chip lg-target">Setpoint</span>
@@ -205,7 +208,7 @@
                     </div>
                     <div class="chart-wrapper" id="wrap-chart-acc">
                         <div class="chart-header-row">
-                            <label>ACCELERATION (RPM/s²)</label>
+                            <label>ACCELERATION (rad/s²)</label>
                             <span class="chart-legend-inline">
                                 <span class="lg-chip lg-actual lg-acc">Actual</span>
                                 <span class="lg-chip lg-target">Setpoint</span>
@@ -388,8 +391,8 @@
                             <div class="input-group"><label>Min PWM</label><input type="number" id="input-min-pwm"
                                     step="0.5" value="0.0"></div>
                         </div>
-                        <div class="input-group"><label>Home Speed (RPM)</label><input type="number"
-                                id="input-home-speed" step="5" value="30"></div>
+                        <div class="input-group"><label>Home Speed (rad/s)</label><input type="number"
+                                id="input-home-speed" step="0.5" value="3.1"></div>
                     </div>
 
                     <div class="tuning-section">
@@ -405,8 +408,8 @@
                     <div class="tuning-section">
                         <h4>Jog & Step Settings</h4>
                         <div class="input-row">
-                            <div class="input-group"><label>Fine RPM</label><input type="number" id="input-jog-fine"
-                                    step="1" value="10"></div>
+                            <div class="input-group"><label>Fine rad/s</label><input type="number" id="input-jog-fine"
+                                    step="0.1" value="1.0"></div>
                             <div class="input-group" style="visibility:hidden"></div>
                         </div>
                         <div class="input-row">
@@ -503,7 +506,7 @@
 
                 <div class="kf-state-grid">
                     <div class="kf-state-item"><label>θ̂ (deg)</label><span id="kf-theta" class="value">--</span></div>
-                    <div class="kf-state-item"><label>ω̂ (RPM)</label><span id="kf-omega" class="value">--</span></div>
+                    <div class="kf-state-item"><label>ω̂ (rad/s)</label><span id="kf-omega" class="value">--</span></div>
                     <div class="kf-state-item"><label>τ̂_L (N·m)</label><span id="kf-tau" class="value">--</span></div>
                     <div class="kf-state-item"><label>î_a (A)</label><span id="kf-ia" class="value">--</span></div>
                     <div class="kf-state-item small"><label>Innov.</label><span id="kf-innov" class="value">--</span>
@@ -542,59 +545,15 @@
                 <div class="safety-toggle-list">
                     <details class="safety-detail">
                         <summary class="safety-row">
-                            <span><span class="caret">▸</span> Stall Detection</span>
-                            <input type="checkbox" id="chk-safe-stall" checked onclick="event.stopPropagation()">
-                        </summary>
-                        <div class="trigger-desc">
-                            <strong>Triggers when:</strong>
-                            <ul>
-                                <li>PWM output ≥ <b>25%</b></li>
-                                <li>AND actual velocity &lt; <b>0.5 RPM</b></li>
-                                <li>AND position error &gt; <b>5°</b> (in POSITION/GHOST mode)</li>
-                                <li>Sustained for <b>2 seconds</b></li>
-                            </ul>
-                            <em>Cause:</em> motor blocked by obstacle, mechanical jam, or wiring fault.
-                        </div>
-                    </details>
-                    <details class="safety-detail">
-                        <summary class="safety-row">
-                            <span><span class="caret">▸</span> Encoder Check</span>
-                            <input type="checkbox" id="chk-safe-encoder" checked onclick="event.stopPropagation()">
-                        </summary>
-                        <div class="trigger-desc">
-                            <strong>Triggers when (either):</strong>
-                            <ul>
-                                <li><b>Phase inversion:</b> PWM &gt; 50% one way, RPM &gt; 5 RPM the other way</li>
-                                <li><b>Signal loss:</b> PWM &gt; 50%, RPM near 0, encoder counts frozen for 1 second
-                                </li>
-                            </ul>
-                            <em>Cause:</em> encoder cable disconnected, A/B swapped, or hardware fault.
-                        </div>
-                    </details>
-                    <details class="safety-detail">
-                        <summary class="safety-row">
                             <span><span class="caret">▸</span> Over-Rotation</span>
                             <input type="checkbox" id="chk-safe-overrot" checked onclick="event.stopPropagation()">
                         </summary>
                         <div class="trigger-desc">
                             <strong>Triggers when:</strong>
                             <ul>
-                                <li>Absolute position exceeds <b>±720°</b> (2 full turns) from home</li>
+                                <li>Absolute position exceeds <b>±540°</b> (1.5 full turns) from home</li>
                             </ul>
                             <em>Cause:</em> wire-twist protection — prevents internal wiring from snapping.
-                        </div>
-                    </details>
-                    <details class="safety-detail">
-                        <summary class="safety-row">
-                            <span><span class="caret">▸</span> Joystick Check</span>
-                            <input type="checkbox" id="chk-safe-joy" checked onclick="event.stopPropagation()">
-                        </summary>
-                        <div class="trigger-desc">
-                            <strong>Triggers when:</strong>
-                            <ul>
-                                <li>ESP32 sends a packet with status byte indicating disconnected</li>
-                            </ul>
-                            <em>Cause:</em> joystick power off, Bluetooth/wireless link lost, or ESP32 fault.
                         </div>
                     </details>
                 </div>
@@ -666,8 +625,8 @@
                 <h4>Settle Thresholds</h4>
                 <div class="input-row">
                     <div class="input-group">
-                        <label>Velocity start (RPM)</label>
-                        <input type="number" id="cfg-vel-threshold" value="3.0" step="0.5" min="0">
+                        <label>Velocity start (rad/s)</label>
+                        <input type="number" id="cfg-vel-threshold" value="0.3" step="0.1" min="0">
                     </div>
                     <div class="input-group">
                         <label>Pos tolerance (°)</label>
@@ -676,8 +635,8 @@
                 </div>
                 <div class="input-row" style="margin-top:0.5rem">
                     <div class="input-group">
-                        <label>Vel tolerance (RPM)</label>
-                        <input type="number" id="cfg-vel-settle" value="3.0" step="0.5" min="0">
+                        <label>Vel tolerance (rad/s)</label>
+                        <input type="number" id="cfg-vel-settle" value="0.3" step="0.1" min="0">
                     </div>
                     <div class="input-group">
                         <label>Settle hold (ms)</label>
@@ -694,6 +653,7 @@
         <div id="log-content"></div>
     </div>
 
+    <script src="https://unpkg.com/uplot/dist/uPlot.iife.min.js"></script>
     <script src="visualizer.js"></script>
     <script src="charts.js"></script>
     <script src="app.js"></script>
