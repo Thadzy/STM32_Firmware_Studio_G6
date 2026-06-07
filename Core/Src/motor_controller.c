@@ -328,7 +328,7 @@ void MotorCtrl_Stop(void)
     s_running          = false;
     Motor_SetPWM(0);
     /* Re-seed S-curve from current position so the next SetTarget starts clean */
-    float cur       = ((float)s_pos_counts * COUNTS_TO_RAD);
+    float cur       = s_kalman.x[0];
     s_sc.pos        = cur;
     s_sc.vel        = 0.0f;
     s_sc.acc        = 0.0f;
@@ -340,13 +340,13 @@ bool MotorCtrl_IsAtTarget(void)
 {
     return s_sc.done
         && s_settle_ticks >= (uint16_t)(ZVD_T3_STEPS + 10u)
-        && fabsf(((float)s_pos_counts * COUNTS_TO_RAD) - s_sc.target) < POSITION_DEADBAND_RAD
+        && fabsf(s_kalman.x[0] - s_sc.target) < POSITION_DEADBAND_RAD
         && fabsf(s_kalman.x[1]) < VELOCITY_SETTLED_RADS;
 }
 
 float MotorCtrl_GetPosition_rad(void)
 {
-    return ((float)s_pos_counts * COUNTS_TO_RAD);
+    return s_kalman.x[0];
 }
 
 void MotorCtrl_HomingCreepVel(int8_t dir, float vel_rads)
@@ -369,7 +369,7 @@ bool MotorCtrl_IsAtPosition(void)
     uint16_t need = TuningParams.zvd.bypass ? 5u : (uint16_t)(ZVD_T3_STEPS + 10u);
     return s_sc.done
         && s_settle_ticks >= need
-        && fabsf(((float)s_pos_counts * COUNTS_TO_RAD) - s_sc.target) < POSITION_DEADBAND_RAD;
+        && fabsf(s_kalman.x[0] - s_sc.target) < POSITION_DEADBAND_RAD;
 }
 
 void MotorCtrl_SyncTrajectory(void)
@@ -378,7 +378,7 @@ void MotorCtrl_SyncTrajectory(void)
        Homing creep bypasses S-curve entirely, leaving s_sc stale.
        Call this before MotorCtrl_SetTarget when exiting homing mode.
        Also enables ZVD bypass — rod is not attached during homing.   */
-    float pos      = ((float)s_pos_counts * COUNTS_TO_RAD);
+    float pos      = s_kalman.x[0];
     s_sc.pos       = pos;
     s_sc.vel       = 0.0f;
     s_sc.acc       = 0.0f;
@@ -555,7 +555,7 @@ void MotorCtrl_Tick1kHz(void)
        Placed after the !s_running gate so s_sc.done is still visible to the
        tracking guard that runs further below.                                 */
     if (g_test_inj.inject_tracking_error) {
-        s_pos_counts = (int64_t)((s_sc.target + 0.30f) * RAD_TO_COUNTS);
+        s_kalman.x[0] = s_sc.target + 0.30f;
     }
 
     float vel_actual = s_kalman.x[1];
@@ -652,7 +652,7 @@ void MotorCtrl_Tick100Hz(void)
 
         /* ── ACTIVE: bang-bang relay with hysteresis ─────────────────── */
         if (s_at_sm == AT_SM_ACTIVE) {
-            float pv  = ((float)s_pos_counts * COUNTS_TO_RAD);              /* Kalman position, rad */
+            float pv  = s_kalman.x[0];              /* Kalman position, rad */
             float err = s_at_sp_rad - pv;
 
             /* Schmitt-trigger relay switching */
@@ -693,7 +693,7 @@ void MotorCtrl_Tick100Hz(void)
        ==================================================================== */
     if (s_jog_active) {
         s_pos_integral  = 0.0f;
-        s_pos_prev_meas = ((float)s_pos_counts * COUNTS_TO_RAD);
+        s_pos_prev_meas = s_kalman.x[0];
         /* Ramp toward commanded velocity — same approach as homing creep.
            Prevents harsh direction reversals when the arm is still coasting
            from a previous move, which can stall the motor at low PWM.        */
@@ -748,7 +748,7 @@ void MotorCtrl_Tick100Hz(void)
     }
 
     /* --- 4. Outer position PID (derivative on measurement) --------------- */
-    float pos_actual = ((float)s_pos_counts * COUNTS_TO_RAD);
+    float pos_actual = s_kalman.x[0];
     float pos_err    = shaped - pos_actual;
 
     /* Position deadband: if error is within ±POS_DEADBAND_RAD, treat as zero.
@@ -810,7 +810,7 @@ send_telemetry:
        ─────────────────────────────────────────────────────────────────────── */
     {
         /* 1. Send standard $T telemetry for compatibility with existing dashboard */
-        int16_t pos_x10 = (int16_t)lroundf(((float)s_pos_counts * COUNTS_TO_RAD) * (180.0f / M_PI) * 10.0f);
+        int16_t pos_x10 = (int16_t)lroundf(s_kalman.x[0] * (180.0f / M_PI) * 10.0f);
         int16_t vel_x10 = (int16_t)lroundf(s_kalman.x[1] * 10.0f);
         int16_t acc_x10 = (int16_t)lroundf(s_kalman.x[2] * 10.0f);
         int16_t co_x10  = (int16_t)(RobotState.motion.motor_pwm * 10);
@@ -824,7 +824,7 @@ send_telemetry:
         int16_t sc_tgt_x10  = (int16_t)lroundf(s_sc.target * (180.0f / M_PI) * 10.0f);
         int16_t sc_pos_x10  = (int16_t)lroundf(s_sc.pos * (180.0f / M_PI) * 10.0f);
         int16_t sh_pos_x10  = (int16_t)lroundf(shaped * (180.0f / M_PI) * 10.0f);
-        int16_t kal_pos_x100 = (int16_t)lroundf(((float)s_pos_counts * COUNTS_TO_RAD) * (180.0f / M_PI) * 100.0f);
+        int16_t kal_pos_x100 = (int16_t)lroundf(s_kalman.x[0] * (180.0f / M_PI) * 100.0f);
         int16_t pos_err_x100 = (int16_t)lroundf(pos_err * (180.0f / M_PI) * 100.0f);
         int16_t vel_sp_x10  = (int16_t)lroundf(s_vel_sp * (180.0f / M_PI) * 10.0f);
         int16_t kal_vel_x10 = (int16_t)lroundf(s_kalman.x[1] * (180.0f / M_PI) * 10.0f);
@@ -844,11 +844,11 @@ send_telemetry:
         /* 2b. Send $KF telemetry for L4-6 (Kalman state estimates)
            Format: $KF,kfTheta_x100,kfOmega_x10,kfTau_x1000,kfIa_x1000,kfInnov_x1000 */
         static char kf_buf[64];
-        int16_t kf_th_x100 = (int16_t)lroundf(((float)s_pos_counts * COUNTS_TO_RAD) * (180.0f / M_PI) * 100.0f);
+        int16_t kf_th_x100 = (int16_t)lroundf(s_kalman.x[0] * (180.0f / M_PI) * 100.0f);
         int16_t kf_om_x10 = (int16_t)lroundf(s_kalman.x[1] * (180.0f / M_PI) * 10.0f);
         int16_t kf_tau_x1000 = (int16_t)lroundf(s_kalman.x[2] * 1000.0f);
         int16_t kf_ia_x1000 = (int16_t)lroundf(s_kalman.x[3] * 1000.0f);
-        int16_t kf_in_x1000 = (int16_t)lroundf((((float)s_pos_counts * COUNTS_TO_RAD) - ((float)s_pos_counts * COUNTS_TO_RAD)) * 1000.0f);
+        int16_t kf_in_x1000 = (int16_t)lroundf((((float)s_pos_counts * COUNTS_TO_RAD) - s_kalman.x[0]) * 1000.0f);
 
         snprintf(kf_buf, sizeof(kf_buf),
                  "$KF,%d,%d,%d,%d,%d\r\n",
@@ -911,7 +911,7 @@ void MotorCtrl_JogVelocity(float vel_rads)
              velocity correctly; preserving its integral gives a bumpless
              entry into velocity-only control (no speed transient at engage). */
         s_pos_integral  = 0.0f;
-        s_pos_prev_meas = ((float)s_pos_counts * COUNTS_TO_RAD);
+        s_pos_prev_meas = s_kalman.x[0];
         s_jog_active    = true;           /* last: ISR sees consistent state */
     }
     s_jog_vel_cmd = vel_rads;
@@ -947,7 +947,7 @@ void MotorCtrl_JogRelease(void)
 
     /* Step 3 — re-seed S-curve with real plant state (bump-less trajectory) */
     {
-        float pos    = ((float)s_pos_counts * COUNTS_TO_RAD);
+        float pos    = s_kalman.x[0];
         float vel    = s_kalman.x[1]; /* inherit actual velocity — no step change */
         s_sc.pos     = pos;
         s_sc.vel     = vel;
@@ -959,7 +959,7 @@ void MotorCtrl_JogRelease(void)
 
     /* Step 4 — flush ZVD buffer so all delayed taps agree on the lock position */
     {
-        float pos = ((float)s_pos_counts * COUNTS_TO_RAD);
+        float pos = s_kalman.x[0];
         uint8_t i;
         for (i = 0u; i < ZVD_BUF_SIZE; i++) { s_zvd_buf[i] = pos; }
     }
@@ -989,7 +989,7 @@ void MotorCtrl_JogStepEngage(void)
     /* Flush the ZVD buffer to current position — prevents stale taps from
        the last normal move from corrupting the first jog step.               */
     {
-        float pos = ((float)s_pos_counts * COUNTS_TO_RAD);
+        float pos = s_kalman.x[0];
         uint8_t i;
         for (i = 0u; i < ZVD_BUF_SIZE; i++) { s_zvd_buf[i] = pos; }
     }
@@ -999,7 +999,7 @@ void MotorCtrl_JogStepEngage(void)
 
     /* Seed S-curve from current state so the first SetTarget() starts clean  */
     {
-        float pos    = ((float)s_pos_counts * COUNTS_TO_RAD);
+        float pos    = s_kalman.x[0];
         s_sc.pos     = pos;
         s_sc.vel     = 0.0f;
         s_sc.acc     = 0.0f;
@@ -1020,7 +1020,7 @@ void MotorCtrl_JogStepDisengage(void)
     /* Re-enable ZVD.  Flush buffer so the first shaped output is current
        position — ZVD delay ramps in naturally over the next 80 ms.           */
     {
-        float pos = ((float)s_pos_counts * COUNTS_TO_RAD);
+        float pos = s_kalman.x[0];
         uint8_t i;
         for (i = 0u; i < ZVD_BUF_SIZE; i++) { s_zvd_buf[i] = pos; }
     }
