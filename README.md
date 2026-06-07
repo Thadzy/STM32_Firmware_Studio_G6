@@ -577,9 +577,17 @@ USB serial (LPUART1, 230400 baud)
                               main.exe listens on COM11
 ```
 
-**Run the bridge:**
-```bash
-python PC_Backend/serial_bridge.py
+**Run the Base System & Bridge (All-in-one):**
+You can run both the base system (`main_v1_2.exe`) and the python backend simultaneously in a split-pane terminal using the provided script. You do not need VSCode; simply run this from `cmd` at the project root:
+```cmd
+run_system.bat
+```
+
+Alternatively, to run the bridge manually without the split-pane script:
+```cmd
+.\.venv\Scripts\activate.bat
+cd PC_Backend
+python serial_bridge.py
 ```
 
 **Diagnostic tools:**

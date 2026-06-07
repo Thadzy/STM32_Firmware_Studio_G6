@@ -49,17 +49,18 @@ static void debounce_update(Debounce_t *d, bool raw)
 
 void HwIo_Init(void)
 {
-    /* E-stop: NC switch wired to GND.  Explicitly set PULLUP so pin is pulled
-       HIGH when contact opens.
-       Closed (normal) → switch pulls pin LOW → inactive.
-       Pressed (opens/floats) → PULLUP pulls pin HIGH → active. */
+    /* E-stop: NO switch wired to VCC. Explicitly set PULLDOWN so pin is held
+       LOW during normal operation. This overrides CubeMX and guarantees no
+       false trigger from floating.
+       Open (normal) → PULLDOWN pulls pin LOW → inactive.
+       Pressed (closed to VCC) → pin HIGH → active. */
     {
         GPIO_InitTypeDef g = {0};
-        g.Pin   = E_Stop_Pin;
+        g.Pin   = E_Stop_Pin | Reset_Btn_Pin;
         g.Mode  = GPIO_MODE_INPUT;
-        g.Pull  = GPIO_PULLUP;
+        g.Pull  = GPIO_PULLDOWN;
         g.Speed = GPIO_SPEED_FREQ_LOW;
-        HAL_GPIO_Init(E_Stop_GPIO_Port, &g);
+        HAL_GPIO_Init(GPIOA, &g);
     }
 
     /* ADC: self-calibrate, then start continuous conversion.
@@ -116,11 +117,11 @@ void HwIo_Init(void)
 
 void HwIo_Poll100Hz(void)
 {
-    /* E-Stop: active LOW (PULLUP on PA5).
-       Normal = contact open = pulled HIGH = inactive.
-       Pressed = contact closes to GND = LOW = active.
-       100 consecutive LOW reads = trigger; one HIGH read = immediate clear. */
-    if (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_RESET) {
+    /* E-Stop: active HIGH (NO to VCC, PULLDOWN on PA5).
+       Normal = contact open = pulled LOW = inactive.
+       Pressed = contact closes to VCC = HIGH = active.
+       Consecutive HIGH reads = trigger; one LOW read = immediate clear. */
+    if (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_SET) {
         if (s_estop_count < ESTOP_DEBOUNCE_THRESHOLD) {
             s_estop_count++;
         }
@@ -164,10 +165,10 @@ void HwIo_Poll100Hz(void)
     if (s_proximity.state && !s_prox_prev_isr) s_prox_latch = true;
     s_prox_prev_isr = s_proximity.state;
 
-    /* Reset button: active LOW (PULLUP on PA7).
+    /* Reset button: active HIGH (NO to VCC, PULLDOWN on PA7).
        20-tick (200 ms) debounce rejects motor-PWM EMI false resets.             */
     {
-        bool raw = (HAL_GPIO_ReadPin(Reset_Btn_GPIO_Port, Reset_Btn_Pin) == GPIO_PIN_RESET);
+        bool raw = (HAL_GPIO_ReadPin(Reset_Btn_GPIO_Port, Reset_Btn_Pin) == GPIO_PIN_SET);
         if (raw == s_reset_btn.state) {
             s_reset_btn.count = 0u;
         } else if (++s_reset_btn.count >= RESET_BTN_DEBOUNCE_TICKS) {

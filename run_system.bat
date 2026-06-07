@@ -1,0 +1,3 @@
+@echo off
+echo Starting Base System and Serial Bridge...
+wt -w 0 -d . cmd /k ".\.venv\Scripts\activate & cd PC_Backend & python serial_bridge.py" ; split-pane -d .\FRA263-264_BaseSystem cmd /k ".\main_v1_2.exe"

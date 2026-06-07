@@ -24,7 +24,7 @@ extern TIM_HandleTypeDef htim6;
    Set to 1 to temporarily disable all autonomous faults (Heartbeat, Joystick 
    watchdog, Homing timeouts, E-stop). Useful for uninterrupted tuning!
    ========================================================================= */
-#define DISABLE_ALL_FAULTS 1
+#define DISABLE_ALL_FAULTS 0
 
 /* =========================================================================
    Homing sub-state machine
@@ -785,7 +785,7 @@ static void fsm_run(void)
             if (HAL_GetTick() - s_estop_verify_t >= ESTOP_VERIFY_MS) {
                 /* Re-read the raw pin RIGHT NOW (bypass debouncer) */
                 bool still_active =
-                    (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_RESET);
+                    (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_SET);
                 if (still_active) {
                     /* Confirmed real E-stop press */
                     RobotState.fsm              = STATE_FAULT;
@@ -1262,11 +1262,9 @@ void App_Run(void)
     /* Run main FSM */
     fsm_run();
 
-    /* --- DIRECT BYPASS TEST --- 
-       Map the raw PA5 (E-Stop) directly to PC9 (Relay_SysStatus) 
-       If button pressed (PA5=0) -> PC9=1 (Relay OFF -> Red LED via NC)
-       If button not pressed (PA5=1) -> PC9=0 (Relay ON -> Green LED via NO) */
-    if (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_RESET) {
+    /* Pilot Lamp logic: Red (Relay OFF, GPIO_PIN_SET) when in FAULT.
+       Green (Relay ON, GPIO_PIN_RESET) when healthy. */
+    if (RobotState.fsm == STATE_FAULT) {
         HAL_GPIO_WritePin(Relay_SysStatus_GPIO_Port, Relay_SysStatus_Pin, GPIO_PIN_SET);
     } else {
         HAL_GPIO_WritePin(Relay_SysStatus_GPIO_Port, Relay_SysStatus_Pin, GPIO_PIN_RESET);
