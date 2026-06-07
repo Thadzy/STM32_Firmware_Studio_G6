@@ -976,6 +976,7 @@ function tuningArmRun(targetOverride) {
     tuningStartPos = state.currentPos;
     tuningVelPeak = 0;
     tuningVelSetPeak = 0;
+    tuningSettleStart = 0; // Fix: Must reset this for subsequent runs to avoid negative settle times
     chartPos.startRun(tuningMoveTarget);
     chartVel.startRun(tuningMoveTarget);
     chartAcc.startRun(tuningMoveTarget);
@@ -1094,13 +1095,20 @@ function tuningFinalize(now) {
     if (tuningMetricsHistory.length > 10) tuningMetricsHistory.shift();
 
     // Update metrics panel
-    document.getElementById('m-pos-settle').innerText = settleTimeSec.toFixed(2) + 's';
+    document.getElementById('m-pos-settle').innerText = settleTimeSec >= 15.0 ? 'Timeout' : settleTimeSec.toFixed(2) + 's';
     document.getElementById('m-pos-over').innerText = posOver.toFixed(1) + '%';
-    document.getElementById('m-vel-settle').innerText = velSettleSec.toFixed(2) + 's';
+    document.getElementById('m-vel-settle').innerText = velSettleSec >= 15.0 ? 'Timeout' : velSettleSec.toFixed(2) + 's';
     document.getElementById('m-vel-over').innerText = velOver.toFixed(1) + '%';
-    renderMetricsHistory();
 
-    setMetricsStatus(`Run #${tuningRunCount} done — Pos settle: ${settleTimeSec.toFixed(2)}s  OS: ${posOver.toFixed(1)}% — Trigger next move to capture again`, 'done');
+    const posErrFinal = Math.abs(state.currentPos - tuningMoveTarget);
+    let msg = `Run #${tuningRunCount} done — Pos settle: ${settleTimeSec >= 15.0 ? 'TIMEOUT' : settleTimeSec.toFixed(2) + 's'}  OS: ${posOver.toFixed(1)}% — Trigger next move to capture again`;
+    
+    if (settleTimeSec >= 15.0 && posErrFinal >= TUNE_POS_SETTLE_DEG) {
+        msg = `Run #${tuningRunCount} timed out! Motor stuck ${posErrFinal.toFixed(2)}° away from target (Steady State Error). Increase Ki or threshold!`;
+    }
+
+    setMetricsStatus(msg, settleTimeSec >= 15.0 ? 'error' : 'done');
+    renderMetricsHistory();
 }
 
 function setMetricsStatus(msg, cls) {
