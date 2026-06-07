@@ -204,6 +204,12 @@ bool UartDma_SendTelemetry_T(uint32_t ts_ms,
 
 bool UartDma_SendJoystick(const uint8_t *data, uint16_t len)
 {
+    /* Wait up to 5ms for any ongoing UART3 DMA transfer to finish so we don't drop audio */
+    uint32_t start = HAL_GetTick();
+    while (s_u3_busy && (HAL_GetTick() - start) < 5u) {
+        /* wait */
+    }
+    
     if (s_u3_busy || len > USART3_TX_BUF) return false;
     memcpy(s_u3_tx, data, len);
     s_u3_busy = true;

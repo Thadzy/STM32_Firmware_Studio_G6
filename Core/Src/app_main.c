@@ -796,9 +796,10 @@ static void fsm_run(void)
             if (HAL_GetTick() - s_estop_verify_t >= ESTOP_VERIFY_MS) {
                 /* Re-read the raw pin RIGHT NOW (bypass debouncer) */
                 bool still_active =
-                    (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_RESET);
+                    (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_RESET) || s_software_estop;
+                
                 if (still_active) {
-                    /* Confirmed real E-stop press */
+                    /* Confirmed real E-stop press or software E-stop */
                     RobotState.fsm              = STATE_FAULT;
                     RobotState.comms.fault_code = 0x01u;
                     set_task(0x0000);
@@ -1400,10 +1401,12 @@ void App_Run(void)
         static FsmState_t s_prev_fsm = STATE_INIT;
         if (RobotState.fsm != s_prev_fsm) {
             switch (RobotState.fsm) {
-            case STATE_HOMING: Joystick_SendAudio('h'); break; /* homing started */
-            case STATE_FAULT:  Joystick_SendAudio('E'); break; /* fault          */
+            case STATE_HOMING:  Joystick_SendAudio('h'); break; /* homing started */
+            case STATE_RUNNING: Joystick_SendAudio('2'); break; /* task started (double beep) */
+            case STATE_FAULT:   Joystick_SendAudio('E'); break; /* fault          */
             case STATE_IDLE:
-                if (s_prev_fsm == STATE_FAULT) Joystick_SendAudio('C'); /* cleared */
+                if (s_prev_fsm == STATE_HOMING) Joystick_SendAudio('H'); /* homing complete */
+                if (s_prev_fsm == STATE_FAULT)  Joystick_SendAudio('C'); /* cleared */
                 break;
             default: break;
             }
