@@ -116,11 +116,11 @@ void HwIo_Init(void)
 
 void HwIo_Poll100Hz(void)
 {
-    /* E-Stop: active HIGH (NC to GND, PULLUP on PA5).
-       Normal = contact closed to GND = LOW = inactive.
-       Pressed = contact open = pulled HIGH = active.
-       Consecutive HIGH reads = trigger; one LOW read = immediate clear. */
-    if (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_SET) {
+    /* E-Stop: active LOW (NO to GND, PULLUP on PA5).
+       Normal = contact open = pulled HIGH = inactive.
+       Pressed = contact closed to GND = LOW = active.
+       Consecutive LOW reads = trigger; one HIGH read = immediate clear. */
+    if (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_RESET) {
         if (s_estop_count < ESTOP_DEBOUNCE_THRESHOLD) {
             s_estop_count++;
         }

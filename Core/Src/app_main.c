@@ -776,7 +776,7 @@ static void fsm_run(void)
             if (HAL_GetTick() - s_estop_verify_t >= ESTOP_VERIFY_MS) {
                 /* Re-read the raw pin RIGHT NOW (bypass debouncer) */
                 bool still_active =
-                    (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_SET);
+                    (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_RESET);
                 if (still_active) {
                     /* Confirmed real E-stop press */
                     RobotState.fsm              = STATE_FAULT;
