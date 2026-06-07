@@ -377,6 +377,7 @@ async function sendCommand(cmd) {
             case "SAFE_OVERROT": sendWsMessage({ action: 'cmd', cmd: `LAB SAFE_OVER ${val}` }); break;
             case "SAFE_JOY": sendWsMessage({ action: 'cmd', cmd: `LAB SAFE_JOY ${val}` }); break;
             case "SAFE_GRIPDLY": sendWsMessage({ action: 'cmd', cmd: `LAB GRIP_DLY ${val}` }); break;
+            case "SAFE_GRIPDLY_MS": sendWsMessage({ action: 'cmd', cmd: `LAB GRIP_DLY_MS ${val}` }); break;
             case "JOG_FINE": sendWsMessage({ action: 'cmd', cmd: `LAB JOGF ${val.toFixed(1)}` }); break;
             case "STEP_COARSE": sendWsMessage({ action: 'cmd', cmd: `LAB STEPC ${val.toFixed(1)}` }); break;
             case "STEP_FINE": sendWsMessage({ action: 'cmd', cmd: `LAB STEPF ${val.toFixed(2)}` }); break;
@@ -858,6 +859,13 @@ Object.entries(SAFETY_TOGGLES).forEach(([id, key]) => {
         });
     }
 });
+
+const elGripDly = document.getElementById('input-gripdly-ms');
+if (elGripDly) {
+    elGripDly.addEventListener('change', e => {
+        sendCommand(`SET:SAFE_GRIPDLY_MS=${e.target.value}`);
+    });
+}
 
 document.getElementById('btn-fine-home').addEventListener('click', () => {
     sendCommand("CMD:HOME");
