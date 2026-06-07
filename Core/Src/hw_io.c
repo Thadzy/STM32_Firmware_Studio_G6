@@ -56,11 +56,11 @@ void HwIo_Init(void)
        Pressed (closed to VCC) → pin HIGH → active. */
     {
         GPIO_InitTypeDef g = {0};
-        g.Pin   = E_Stop_Pin | Reset_Btn_Pin;
+        g.Pin   = E_Stop_Pin;
         g.Mode  = GPIO_MODE_INPUT;
         g.Pull  = GPIO_PULLDOWN;
         g.Speed = GPIO_SPEED_FREQ_LOW;
-        HAL_GPIO_Init(GPIOA, &g);
+        HAL_GPIO_Init(E_Stop_GPIO_Port, &g);
     }
 
     /* ADC: self-calibrate, then start continuous conversion.
@@ -165,7 +165,7 @@ void HwIo_Poll100Hz(void)
     if (s_proximity.state && !s_prox_prev_isr) s_prox_latch = true;
     s_prox_prev_isr = s_proximity.state;
 
-    /* Reset button: active HIGH (NO to VCC, PULLDOWN on PA7).
+    /* Reset button: NC switch wired to GND (active HIGH when open due to PULLUP on PA7).
        20-tick (200 ms) debounce rejects motor-PWM EMI false resets.             */
     {
         bool raw = (HAL_GPIO_ReadPin(Reset_Btn_GPIO_Port, Reset_Btn_Pin) == GPIO_PIN_SET);
