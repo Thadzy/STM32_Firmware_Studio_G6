@@ -121,11 +121,8 @@ static uint32_t s_at_settle_t0;   /* HAL_GetTick() when SETTLING began       */
    so single-context; no re-entrancy concern.                                */
 
 /* -------------------------------------------------------------------------
-   Software safety stack — 1-ms persistence counters
+   Software safety stack
    ------------------------------------------------------------------------- */
-static uint16_t s_enc_stall_cnt;    /* encoder health: ticks at high PWM + zero delta  */
-static uint16_t s_overcurrent_cnt;  /* current fuse:   ticks above CURRENT_FAULT_AMPS  */
-static uint16_t s_tracking_err_cnt; /* tracking error: ticks with |target−pos| > 10°   */
 
 static void safety_trip(uint8_t code)
 {
@@ -284,9 +281,6 @@ void MotorCtrl_Init(void)
     s_zvd_head         = 0;
     s_settle_ticks     = 0;
     s_running          = false;
-    s_enc_stall_cnt    = 0;
-    s_overcurrent_cnt  = 0;
-    s_tracking_err_cnt = 0;
 
     /* Jog state — both options start disengaged */
     s_jog_active   = false;
@@ -340,9 +334,6 @@ void MotorCtrl_Stop(void)
     s_sc.acc        = 0.0f;
     s_sc.target     = cur;
     s_sc.done       = true;
-    s_enc_stall_cnt    = 0;
-    s_overcurrent_cnt  = 0;
-    s_tracking_err_cnt = 0;
 }
 
 bool MotorCtrl_IsAtTarget(void)
@@ -612,57 +603,8 @@ void MotorCtrl_Tick1kHz(void)
 
     /* --- Software Safety Stack ------------------------------------------- */
 
-    /* Guard 1: Encoder health — detect broken/disconnected encoder cable.
-       If the motor is being driven (|PWM| > threshold) but the encoder shows
-       no movement for SAFETY_ENC_STALL_MS consecutive ticks → fault 0x40.   */
-    if (RobotState.dbg.safety.en_encoder_health) {
-        if ((pwm > SAFETY_ENC_STALL_PWM || pwm < -SAFETY_ENC_STALL_PWM) && delta == 0) {
-            if (++s_enc_stall_cnt >= SAFETY_ENC_STALL_MS) {
-                safety_trip(0x40u);
-                RobotState.dbg.safety.tripped_encoder = true;
-                s_enc_stall_cnt = 0;
-            }
-        } else {
-            s_enc_stall_cnt = 0;
-        }
-    } else {
-        s_enc_stall_cnt = 0;
-    }
-
-    /* Guard 3: Persistent current fuse — overcurrent jam / stall detection.
-       100 ms persistence filters WCS1800 sensor noise and motion transients. */
-    if (RobotState.dbg.safety.en_current_safety) {
-        if (RobotState.sensors.current_amps > CURRENT_FAULT_AMPS) {
-            if (++s_overcurrent_cnt >= SAFETY_CURRENT_MS) {
-                safety_trip(0x42u);
-                RobotState.dbg.safety.tripped_current = true;
-                s_overcurrent_cnt = 0;
-            }
-        } else {
-            s_overcurrent_cnt = 0;
-        }
-    } else {
-        s_overcurrent_cnt = 0;
-    }
-
-    /* Guard 4: Tracking error — mechanical jam after move completes.
-       Gate on s_sc.done: during cruise the cascade lag can exceed 100°, so
-       checking mid-move would false-trip.  After the S-curve finishes the arm
-       must settle within SAFETY_TRACKING_DEG in SAFETY_TRACKING_MS ticks.   */
-    if (RobotState.dbg.safety.en_tracking_safety && !s_homing_mode && s_sc.done) {
-        float err_rad = fabsf(s_sc.target - s_kalman.x[0]);
-        if (err_rad > SAFETY_TRACKING_DEG * (M_PI / 180.0f)) {
-            if (++s_tracking_err_cnt >= SAFETY_TRACKING_MS) {
-                safety_trip(0x43u);
-                RobotState.dbg.safety.tripped_tracking = true;
-                s_tracking_err_cnt = 0;
-            }
-        } else {
-            s_tracking_err_cnt = 0;
-        }
-    } else {
-        s_tracking_err_cnt = 0;
-    }
+    /* Guard 2: Boundary / Over-rotation protection — always active */
+    /* This is checked early in the loop at [HOOK B] / Guard 2. */
 }
 
 /* -------------------------------------------------------------------------

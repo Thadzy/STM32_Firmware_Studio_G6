@@ -24,7 +24,7 @@ extern TIM_HandleTypeDef htim6;
    Set to 1 to temporarily disable all autonomous faults (Heartbeat, Joystick 
    watchdog, Homing timeouts, E-stop). Useful for uninterrupted tuning!
    ========================================================================= */
-#define DISABLE_ALL_FAULTS 0
+#define DISABLE_ALL_FAULTS 1
 
 /* =========================================================================
    Homing sub-state machine

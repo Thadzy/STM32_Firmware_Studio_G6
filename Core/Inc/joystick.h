@@ -22,5 +22,10 @@ void Joystick_Init(void);
 /* Get the most recent gamepad state */
 JoyState_t Joystick_GetState(void);
 
+/* Send an audio feedback command to the ESP32 speaker */
+void Joystick_SendAudio(char cmd);
+
+/* Check if the joystick has sent a message recently (watchdog) */
+bool Joystick_IsAlive(void);
 
 #endif /* __JOYSTICK_H */

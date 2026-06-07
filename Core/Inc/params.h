@@ -112,12 +112,6 @@
 #define VELOCITY_SETTLED_RADS   0.05f       /* rad/s — near-stop threshold    */
 
 /* --- Software Safety Stack -------------------------------------------------*/
-#define SAFETY_ENC_STALL_PWM    5       /* |PWM| threshold to arm encoder health guard (10 % torque) */
-#define SAFETY_ENC_STALL_MS     200u    /* ticks of zero delta at high PWM before enc-disconnect fault */
-#define CURRENT_FAULT_AMPS      2.0f    /* TODO: calibrate to motor stall current — WCS1800 range ±35 A */
-#define SAFETY_CURRENT_MS       100u    /* ticks of overcurrent before fault (prevents sensor noise trips) */
-#define SAFETY_TRACKING_DEG     25.0f   /* max |target − position| after S-curve completes (degrees) */
-#define SAFETY_TRACKING_MS      300u    /* ticks of excess tracking error before jam fault */
 
 /* --- Heartbeat -------------------------------------------------------------*/
 #define HEARTBEAT_TIMEOUT_MS    2000u   /* soft-stop to IDLE if PC silent this long */

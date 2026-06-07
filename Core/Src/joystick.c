@@ -1,5 +1,6 @@
 #include "joystick.h"
 #include "uart_dma_manager.h"
+#include "main.h"
 #include <stdint.h>
 
 /* Latest parsed gamepad state — written by ISR callback, read by main loop  */
