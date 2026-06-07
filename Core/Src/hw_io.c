@@ -119,22 +119,26 @@ static bool read_estop_pin_emi_filtered(void)
     /* The motor PWM runs at ~20 kHz (50 us period).
        The maximum duty cycle is capped at 50% (MOTOR_VOLT_LIMIT_PWM), 
        meaning the PWM is LOW for at most 25 us.
-       If the E-Stop pin is picking up PWM EMI, it will toggle HIGH/LOW.
-       A real human press will hold the pin solidly LOW.
-       By reading the pin twice, spaced 35 us apart, we guarantee that 
-       PWM EMI will be HIGH for at least one of the reads. 
-       If BOTH reads are LOW, it's a genuine solid connection to GND. */
+       If we take 3 samples spaced 20 us apart (t=0, t=20, t=40), 
+       it is mathematically impossible for all 3 samples to fall into 
+       the 25 us LOW window of a 50 us period. At least one sample WILL hit 
+       the 25 us HIGH window, completely rejecting the EMI noise.
+       A real human press will hold the pin solidly LOW for all 3 samples. */
     if (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_SET) return false;
     
-    /* Delay ~35 us using DWT cycle counter. 1 us = 170 cycles at 170 MHz. */
+    /* Delay 20 us */
     uint32_t start = DWT->CYCCNT;
-    while ((DWT->CYCCNT - start) < (170u * 35u)) {
-        /* wait */
-    }
+    while ((DWT->CYCCNT - start) < (170u * 20u)) { }
     
     if (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_SET) return false;
     
-    return true; /* Solidly LOW across the 35 us window */
+    /* Delay another 20 us */
+    start = DWT->CYCCNT;
+    while ((DWT->CYCCNT - start) < (170u * 20u)) { }
+    
+    if (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_SET) return false;
+    
+    return true; /* Solidly LOW across 40 us */
 }
 
 void HwIo_Poll100Hz(void)

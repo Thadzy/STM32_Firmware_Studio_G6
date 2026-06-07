@@ -1220,9 +1220,9 @@ void Dashboard_ParseCommand(const char* cmd)
                 s_run_mode  = RUN_TEST;
             }
         }
-    } else if (strncmp(cmd, "CMD:ESTOP=1", 11) == 0) {
+    } else if (strncmp(cmd, "$CMD:ESTOP=1", 12) == 0) {
         s_software_estop = true;
-    } else if (strncmp(cmd, "CMD:CLEAR", 9) == 0) {
+    } else if (strncmp(cmd, "$CMD:CLEAR", 10) == 0) {
         s_software_estop = false;
         if (!HwIo_GetEStop() && RobotState.fsm == STATE_FAULT) {
             RobotState.fsm                          = STATE_IDLE;
