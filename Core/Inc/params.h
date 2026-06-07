@@ -63,14 +63,14 @@
 
 /* --- PID Gains — Velocity loop (inner, 1 kHz) ------------------------------*/
 #define PID_SPEED_KP            1.58f
-#define PID_SPEED_KI            0.5f
+#define PID_SPEED_KI            2.0f
 #define PID_SPEED_KD            0.0f
 #define PID_SPEED_IMAX          40.0f   /* integral clamp (PWM units)         */
 
 /* --- PID Gains — Position loop (outer, 100 Hz) -----------------------------*/
 #define PID_POS_KP              3.0f
-#define PID_POS_KI              0.02f
-#define PID_POS_KD              0.15f
+#define PID_POS_KI              0.01f
+#define PID_POS_KD              0.0f
 #define PID_POS_IMAX            100.0f  /* integral clamp (rad)               */
 
 /* --- Feedforward Gains -----------------------------------------------------*/
