@@ -462,10 +462,14 @@ static void homing_run(void)
             float base_rad  = deg_to_rad(-HOME_OFFSET_DEG);
             int16_t adj_deg = (int16_t)ModbusBridge_GetReg(MODBUS_REG_HOME_OFFSET);
             s_home_offset_rad = base_rad + deg_to_rad((float)adj_deg) + deg_to_rad(TuningParams.homing.offset_deg);
-            hom_dbg("ZERO", rad_to_deg((s_edge_a + s_edge_b) * 0.5f),
+            float center_rad = (s_edge_a + s_edge_b) * 0.5f;
+            float current_rad = MotorCtrl_GetPosition_rad();
+            float exact_current_rad = s_home_offset_rad + (current_rad - center_rad);
+
+            hom_dbg("ZERO", rad_to_deg(center_rad),
                     rad_to_deg(s_user_home_rad),
-                    rad_to_deg(MotorCtrl_GetPosition_rad()));
-            MotorCtrl_Zero(s_home_offset_rad);
+                    rad_to_deg(current_rad));
+            MotorCtrl_Zero(exact_current_rad);
             MotorCtrl_SetZvdBypass(true);   /* keep ZVD off until rod is attached and ZVD params are re-tuned */
             MotorCtrl_SetTarget(s_user_home_rad);
             Joystick_SendAudio('H'); /* @H = homing complete */
