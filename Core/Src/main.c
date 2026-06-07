@@ -597,7 +597,10 @@ static void MX_GPIO_Init(void)
   HAL_GPIO_WritePin(GPIOA, Gripper_Up_Pin|Gripper_Down_Pin|Motor_Direction_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, Relay_SysStatus_Pin|Relay_Sysmode_Pin|Relay_MotorPower_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOB, Relay_Sysmode_Pin|Relay_MotorPower_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(Relay_SysStatus_GPIO_Port, Relay_SysStatus_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin : B1_Pin */
   GPIO_InitStruct.Pin = B1_Pin;
@@ -608,7 +611,7 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pins : Reed_Close_Pin Reed_Down_Pin Reed_Open_Pin */
   GPIO_InitStruct.Pin = Reed_Close_Pin|Reed_Down_Pin|Reed_Open_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
   /*Configure GPIO pins : Gripper_Up_Pin Gripper_Down_Pin Motor_Direction_Pin */
@@ -627,15 +630,22 @@ static void MX_GPIO_Init(void)
   /*Configure GPIO pin : Reed_Up_Pin */
   GPIO_InitStruct.Pin = Reed_Up_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Pull = GPIO_PULLDOWN;
   HAL_GPIO_Init(Reed_Up_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : Relay_SysStatus_Pin Relay_Sysmode_Pin Relay_MotorPower_Pin */
-  GPIO_InitStruct.Pin = Relay_SysStatus_Pin|Relay_Sysmode_Pin|Relay_MotorPower_Pin;
+  /*Configure GPIO pins : Relay_Sysmode_Pin Relay_MotorPower_Pin */
+  GPIO_InitStruct.Pin = Relay_Sysmode_Pin|Relay_MotorPower_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : Relay_SysStatus_Pin */
+  GPIO_InitStruct.Pin = Relay_SysStatus_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(Relay_SysStatus_GPIO_Port, &GPIO_InitStruct);
 
   /*Configure GPIO pin : Proximity_Sensor_Pin */
   GPIO_InitStruct.Pin = Proximity_Sensor_Pin;

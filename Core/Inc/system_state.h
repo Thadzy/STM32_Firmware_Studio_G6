@@ -97,6 +97,8 @@ typedef struct {
                             Set back to 0 before any real operation.               */
         bool zvd_bypass;
         volatile bool estop_disabled;
+        uint8_t estop_raw_pin;
+        uint8_t pc9_output;
 
         /* Software Safety Stack -------------------------------------------
            en_*     : set false to disable a guard during commissioning

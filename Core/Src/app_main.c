@@ -764,6 +764,10 @@ static void handle_joystick(void)
    ========================================================================= */
 static void fsm_run(void)
 {
+    /* Update debug variables for Live Expressions */
+    RobotState.dbg.estop_raw_pin = (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_SET) ? 1 : 0;
+    RobotState.dbg.pc9_output = (HAL_GPIO_ReadPin(Relay_SysStatus_GPIO_Port, Relay_SysStatus_Pin) == GPIO_PIN_SET) ? 1 : 0;
+
     /* ── Two-stage E-stop: stop-and-verify ──────────────────────────────────
        Stage 1 (trigger):  debounced estop fires → motor stops IMMEDIATELY.
        Stage 2 (verify):   wait ESTOP_VERIFY_MS with motor off.  Motor EMI
@@ -1258,8 +1262,18 @@ void App_Run(void)
     /* Run main FSM */
     fsm_run();
 
-    /* Emergency pilot lamp — ON whenever robot is in FAULT */
-    Relay_SetStatus(RobotState.fsm == STATE_FAULT);
+    /* --- DIRECT BYPASS TEST --- 
+       Map the raw PA5 (E-Stop) directly to PC9 (Relay_SysStatus) 
+       If button pressed (PA5=0) -> PC9=1 (Relay OFF -> Red LED via NC)
+       If button not pressed (PA5=1) -> PC9=0 (Relay ON -> Green LED via NO) */
+    if (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_RESET) {
+        HAL_GPIO_WritePin(Relay_SysStatus_GPIO_Port, Relay_SysStatus_Pin, GPIO_PIN_SET);
+    } else {
+        HAL_GPIO_WritePin(Relay_SysStatus_GPIO_Port, Relay_SysStatus_Pin, GPIO_PIN_RESET);
+    }
+    
+    /* Update Live Expressions debug variable for PC9 */
+    RobotState.dbg.pc9_output = (HAL_GPIO_ReadPin(Relay_SysStatus_GPIO_Port, Relay_SysStatus_Pin) == GPIO_PIN_SET) ? 1 : 0;
 
     /* Audio feedback on FSM state transitions */
     {
