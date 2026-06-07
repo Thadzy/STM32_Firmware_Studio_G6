@@ -563,12 +563,10 @@ void MotorCtrl_Tick1kHz(void)
 
     /* Conditional integration — pause when speed is already saturated       */
     float u_ff = TuningParams.ff.velocity * s_vel_sp + TuningParams.ff.accel * s_acc_sp;
-    if (!s_homing_mode) {
-        if (s_vel_sp > 0.01f) {
-            u_ff += TuningParams.ff.disturbance;
-        } else if (s_vel_sp < -0.01f) {
-            u_ff -= TuningParams.ff.disturbance;
-        }
+    if (s_vel_sp > 0.01f) {
+        u_ff += TuningParams.ff.disturbance;
+    } else if (s_vel_sp < -0.01f) {
+        u_ff -= TuningParams.ff.disturbance;
     }
     if (fabsf(u_ff) < (float)MOTOR_PWM_MAX - 1.0f) {
         s_spd_integral += vel_err * DT_INNER;
