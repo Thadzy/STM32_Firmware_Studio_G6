@@ -63,7 +63,7 @@
 
 /* --- PID Gains — Velocity loop (inner, 1 kHz) ------------------------------*/
 #define PID_SPEED_KP            1.58f
-#define PID_SPEED_KI            2.0f
+#define PID_SPEED_KI            0.2f
 #define PID_SPEED_KD            0.0f
 #define PID_SPEED_IMAX          40.0f   /* integral clamp (PWM units)         */
 
@@ -132,15 +132,15 @@
    Raise back toward 0.8 once sensor wiring is confirmed and edge is seen. */
 #define HOMING_VEL_RADS         0.8f    /* creep velocity for edge search (rad/s) ~46 deg/s   */
 /* --- Two-stage homing ------------------------------------------------------*/
-#define HOMING_FAST_VEL_RADS    0.8f    /* Stage-1 coarse search (= HOMING_VEL_RADS)          */
+#define HOMING_FAST_VEL_RADS    2.0f    /* Stage-1 coarse search (~114 deg/s)                 */
 #define HOMING_PREC_VEL_RADS    0.5f    /* Stage-3 precision search (~29 deg/s). Above motor
                                            dead zone → smooth, no stick-slip crawl. Repeatability
                                            comes from A/B latency cancelling at EQUAL velocity,
                                            not from low speed — keep fast enough to move cleanly. */
 #define HOMING_BACKOFF_DEG      5.0f    /* extra travel past prox-OFF to clear the window     */
 #define HOMING_BACKOFF_MAX_DEG  60.0f   /* abort if sensor never clears during backoff        */
-#define HOMING_ACCEL_RADS2      2.0f    /* velocity ramp rate during homing (rad/s²)          */
-#define HOMING_WIGGLE_STEP_DEG  30.0f   /* amplitude increment per wiggle step (degrees)      */
+#define HOMING_ACCEL_RADS2      4.0f    /* velocity ramp rate during homing (rad/s²)          */
+#define HOMING_WIGGLE_STEP_DEG  90.0f   /* amplitude increment per wiggle step (degrees)      */
 /* Hardware-calibrated offset: proximity sensor center → working 0°.
    = position reading (in degrees) when arm is at physical home, taken from
      s_pos_counts × (360.0 / 8192.0) in Live Expressions after homing.
