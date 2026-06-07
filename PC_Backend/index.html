@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ROBO-COOK PRO | Telemetry & Control</title>
+    <link rel="stylesheet" href="styles.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=JetBrains+Mono:wght@400;700&display=swap"
+        rel="stylesheet">
+</head>
+
+<body class="dark-theme">
+    <header>
+        <div class="logo">
+            <span class="brand">ROBO-COOK</span>
+            <span class="model">PRO DASHBOARD</span>
+        </div>
+        <div class="header-controls">
+            <div id="serial-status" class="status-indicator disconnected">Disconnected</div>
+            <button id="connect-btn" class="primary-btn">Connect Robot</button>
+            <button id="sim-btn" class="secondary-btn">Simulate Data</button>
+            <button id="estop-btn" class="danger-btn">EMERGENCY STOP</button>
+        </div>
+    </header>
+
+    <main class="dashboard-grid">
+        <!-- Column 1: Visuals & Status -->
+        <div class="col-left">
+            <div class="card visualizer-card">
+                <h3>Top View Visualizer</h3>
+                <div class="canvas-container visualizer-split">
+                    <canvas id="robot-visualizer"></canvas>
+                    <canvas id="gripper-visualizer"></canvas>
+                </div>
+                <div class="visualizer-labels">
+                    <span class="label-pos">Actual</span>
+                    <span class="label-target">Target</span>
+                </div>
+            </div>
+
+            <div class="card status-card">
+                <h3>System Status</h3>
+                <div class="status-grid">
+                    <div class="status-item">
+                        <label>Mode</label>
+                        <span id="stat-mode" class="value">---</span>
+                    </div>
+                    <div class="status-item">
+                        <label>Faults <button id="btn-fault-info" class="info-btn"
+                                title="Fault details & safety config">ℹ</button></label>
+                        <span id="stat-fault" class="value ok">None</span>
+                    </div>
+                    <div class="status-item">
+                        <label>Joystick</label>
+                        <span id="stat-joy" class="value">OFF</span>
+                    </div>
+                    <div class="status-item">
+                        <label>Modbus</label>
+                        <span id="stat-modbus" class="value">IDLE</span>
+                    </div>
+                    <div class="status-item">
+                        <label>System Mode</label>
+                        <span id="stat-sysmode" class="value">BASE</span>
+                    </div>
+                    <div class="status-item">
+                        <label>Jog Mode</label>
+                        <span id="stat-jogmode" class="value">COARSE</span>
+                    </div>
+                    <div class="status-item highlight">
+                        <label>Applied PWM</label>
+                        <span id="stat-pwm" class="value">0%</span>
+                    </div>
+                </div>
+
+
+                <div class="hw-io-grid">
+                    <div class="io-item" id="io-prox">
+                        <div class="led"></div>
+                        <label>Prox</label>
+                    </div>
+                    <div class="io-item" id="io-estop">
+                        <div class="led"></div>
+                        <label>E-Stop</label>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card path-card">
+                <h3>Path Sequencer</h3>
+                <div class="path-editor">
+                    <div class="input-row">
+                        <input type="number" id="input-new-waypoint" placeholder="Angle (deg)" step="1">
+                        <button id="btn-add-waypoint" class="primary-btn">+</button>
+                    </div>
+                    <ul id="waypoint-list"></ul>
+                </div>
+                <div class="path-controls">
+                    <div class="input-group">
+                        <label>Delay (s)</label>
+                        <input type="number" id="input-seq-delay" value="2" step="0.5">
+                    </div>
+                    <div class="gripper-seq-row">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="chk-use-gripper">
+                            Use Gripper
+                        </label>
+                        <button id="btn-gripper-settings" class="info-btn" title="Gripper settings">ⓘ</button>
+                    </div>
+                    <div class="toggle-group">
+                        <button id="btn-run-seq" class="toggle-btn">Run</button>
+                        <button id="btn-loop-seq" class="toggle-btn">Loop</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card metrics-card" style="display: none;">
+                <div class="metrics-header">
+                    <h3>Step Response Metrics</h3>
+                    <button id="btn-metrics-config" class="info-btn" title="Settle thresholds & config">⚙</button>
+                </div>
+                <div id="metrics-status" class="metrics-status-bar">IDLE — Switch to Tuning Mode and move motor</div>
+                <div class="metrics-main-grid">
+                    <div class="metric-block">
+                        <h4>POSITION</h4>
+                        <div class="metric-row">
+                            <div class="metric-item"><label>Settling</label><span id="m-pos-settle"
+                                    class="metric-val">--</span></div>
+                            <div class="metric-item"><label>Overshoot</label><span id="m-pos-over"
+                                    class="metric-val">--</span></div>
+                        </div>
+                    </div>
+                    <div class="metric-block">
+                        <h4>VELOCITY</h4>
+                        <div class="metric-row">
+                            <div class="metric-item"><label>Settling</label><span id="m-vel-settle"
+                                    class="metric-val">--</span></div>
+                            <div class="metric-item"><label>Overshoot</label><span id="m-vel-over"
+                                    class="metric-val">--</span></div>
+                        </div>
+                    </div>
+                </div>
+                <div class="metrics-history-section">
+                    <h4>Run History</h4>
+                    <table class="metrics-table">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Pos.Set(s)</th>
+                                <th>Pos.OS%</th>
+                                <th>Vel.Set(s)</th>
+                                <th>Vel.OS%</th>
+                            </tr>
+                        </thead>
+                        <tbody id="metrics-history-body"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+
+        <!-- Column 2: Telemetry -->
+        <div class="col-center">
+            <div class="card telemetry-card">
+                <div class="card-header">
+                    <h3>Motion Telemetry</h3>
+                    <div class="view-mode-switch" id="view-mode-switch">
+                        <button id="mode-toggle-btn" class="vm-btn active" data-mode="live">Live</button>
+                        <button id="mode-tuning-btn" class="vm-btn" data-mode="tuning">Tuning</button>
+                        <button id="mode-test-btn" class="vm-btn" data-mode="test">Test</button>
+                    </div>
+                    <div class="chart-legend">
+                        <label class="legend-item pos"><input type="checkbox" id="chk-show-pos" checked>Pos</label>
+                        <label class="legend-item vel"><input type="checkbox" id="chk-show-vel" checked>Vel</label>
+                        <label class="legend-item acc"><input type="checkbox" id="chk-show-acc" checked>Acc</label>
+                    </div>
+                </div>
+                <div class="canvas-container multi-chart">
+                    <div class="chart-wrapper" id="wrap-chart-pos">
+                        <div class="chart-header-row">
+                            <label>POSITION (deg)</label>
+                            <span class="chart-legend-inline">
+                                <span class="lg-chip lg-actual lg-pos">Encoder</span>
+                                <span class="lg-chip lg-target">Target</span>
+                                <span class="lg-chip lg-kf">Kalman</span>
+                                <span class="lg-chip lg-sanity">Model</span>
+                            </span>
+                        </div>
+                        <canvas id="chart-pos"></canvas>
+                    </div>
+                    <div class="chart-wrapper" id="wrap-chart-vel">
+                        <div class="chart-header-row">
+                            <label>VELOCITY (RPM)</label>
+                            <span class="chart-legend-inline">
+                                <span class="lg-chip lg-actual lg-vel">Raw vel</span>
+                                <span class="lg-chip lg-target">Setpoint</span>
+                                <span class="lg-chip lg-kf">Kalman</span>
+                                <span class="lg-chip lg-sanity">Model</span>
+                            </span>
+                        </div>
+                        <canvas id="chart-vel"></canvas>
+                    </div>
+                    <div class="chart-wrapper" id="wrap-chart-acc">
+                        <div class="chart-header-row">
+                            <label>ACCELERATION (RPM/s²)</label>
+                            <span class="chart-legend-inline">
+                                <span class="lg-chip lg-actual lg-acc">Actual</span>
+                                <span class="lg-chip lg-target">Setpoint</span>
+                            </span>
+                        </div>
+                        <canvas id="chart-acc"></canvas>
+                    </div>
+                </div>
+
+                <!-- TEST MODE PANEL — replaces chart area when Test view is active -->
+                <div id="test-panel" class="test-panel hidden">
+                    <div class="test-panel-header">
+                        <h3>Test Suite</h3>
+                        <button id="btn-test-folder" class="secondary-btn sm" title="Pick the folder where CSVs will be saved">Pick Folder</button>
+                        <div id="test-folder-status" class="test-folder-status">No folder selected — CSVs will download.</div>
+                    </div>
+
+                    <div id="test-recording-bar" class="test-rec-bar hidden">
+                        <span class="rec-dot"></span>
+                        <span id="test-rec-label">Recording…</span>
+                        <span id="test-rec-samples" class="test-rec-samples">0 samples</span>
+                        <span id="test-rec-elapsed" class="test-rec-elapsed">0.0s</span>
+                        <button id="btn-test-stop" class="danger-btn sm">Stop</button>
+                    </div>
+
+                    <div class="test-panel-grid">
+                        <div class="test-group">
+                            <h4>Hardware Tests</h4>
+                            <div class="test-btn-grid">
+                                <button class="test-btn" data-test="HW1">HW-1 Encoder</button>
+                                <button class="test-btn" data-test="HW2">HW-2 PWM→Speed</button>
+                                <button class="test-btn" data-test="HW3">HW-3 Step (no load)</button>
+                                <button class="test-btn" data-test="HW4">HW-4 Step (2 kg)</button>
+                                <button class="test-btn" data-test="HW5">HW-5 Precision 100×</button>
+                                <button class="test-btn" data-test="HW6">HW-6 Rot 540°</button>
+                                <button class="test-btn" data-test="HW7">HW-7 Full Auto</button>
+                                <button class="test-btn" data-test="HW8">HW-8 Set Home</button>
+                                <button class="test-btn" data-test="HW9">HW-9 Out-of-WS</button>
+                                <button class="test-btn" data-test="HW10">HW-10 Rod drop</button>
+                            </div>
+                        </div>
+
+                        <div class="test-group">
+                            <h4>Lab 4 Experiments</h4>
+                            <div class="test-btn-grid">
+                                <button class="test-btn" data-test="L4-1-TRAP">L4-1 Trap</button>
+                                <button class="test-btn" data-test="L4-1-SCURVE">L4-1 S-Curve</button>
+                                <button class="test-btn" data-test="L4-2-FF">L4-2 +FF</button>
+                                <button class="test-btn" data-test="L4-2-NOFF">L4-2 −FF</button>
+                                <button class="test-btn" data-test="L4-3">L4-3 PID step</button>
+                                <button class="test-btn" data-test="L4-4">L4-4 Anti-windup</button>
+                                <button class="test-btn" data-test="L4-5">L4-5 Kalman Q/R</button>
+                                <button class="test-btn" data-test="L4-6">L4-6 Kalman ia</button>
+                                <button class="test-btn" data-test="L4-7">L4-7 SysID</button>
+                            </div>
+                        </div>
+
+                        <div class="test-group">
+                            <h4>Free Capture</h4>
+                            <div class="test-btn-row">
+                                <input type="text" id="test-free-tag" placeholder="tag (e.g. tune_run3)" />
+                                <button id="btn-test-free" class="primary-btn sm">Start</button>
+                            </div>
+                            <div class="test-limit-row">
+                                <label class="test-limit-item">
+                                    <input type="checkbox" id="cap-opt-time" />
+                                    Auto-stop after
+                                    <input type="number" id="cap-opt-time-val" value="5" min="0.5" step="0.5" />
+                                    s
+                                </label>
+                                <label class="test-limit-item">
+                                    <input type="checkbox" id="cap-opt-settle" />
+                                    Only record while moving (|vel|&gt;
+                                    <input type="number" id="cap-opt-settle-val" value="3" min="0.1" step="0.5" />
+                                    RPM)
+                                </label>
+                                <label class="test-limit-item">
+                                    <input type="checkbox" id="cap-opt-decim" />
+                                    Keep 1 in
+                                    <input type="number" id="cap-opt-decim-val" value="5" min="1" step="1" />
+                                </label>
+                            </div>
+                            <div class="test-hint">All limits also apply to the HW/L4 test buttons. Manual Stop always works.</div>
+                        </div>
+
+                        <div class="test-group">
+                            <h4>Manual Entry (protractor / single-value tests)</h4>
+                            <div class="test-manual-row">
+                                <select id="test-manual-id">
+                                    <option value="HW1">HW-1 Encoder</option>
+                                    <option value="HW5">HW-5 Precision</option>
+                                    <option value="HW8">HW-8 Set Home</option>
+                                    <option value="HW9">HW-9 Out-of-WS</option>
+                                    <option value="HW10">HW-10 Rod drop</option>
+                                </select>
+                                <input type="number" id="test-manual-target" placeholder="target" step="0.01" />
+                                <input type="number" id="test-manual-measured" placeholder="measured" step="0.01" />
+                                <input type="text" id="test-manual-note" placeholder="note (optional)" />
+                                <button id="btn-test-manual-save" class="primary-btn sm">Save Row</button>
+                            </div>
+                            <div id="test-manual-status" class="test-hint"></div>
+                        </div>
+
+                        <div class="test-group test-files-group">
+                            <h4>Recent Files</h4>
+                            <ul id="test-file-list" class="test-file-list"><li class="test-file-empty">none yet</li></ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Column 3: Controls -->
+        <div class="col-right">
+            <div class="card control-card tuning-expanded">
+                <h3>Tuning Lab</h3>
+                <div class="tuning-scroll-area">
+                    <div class="tuning-section">
+                        <h4>PID Speed Loop</h4>
+                        <div class="input-row">
+                            <div class="input-group"><label>Kp</label><input type="number" id="input-speed-kp"
+                                    step="0.01" value="1.0"></div>
+                            <div class="input-group"><label>Ki</label><input type="number" id="input-speed-ki"
+                                    step="0.01" value="2.0"></div>
+                        </div>
+                        <div class="input-row">
+                            <div class="input-group"><label>Kd</label><input type="number" id="input-speed-kd"
+                                    step="0.001" value="0.0"></div>
+                            <div class="input-group"><label>K_vff [V/(rad/s)]</label><input type="number"
+                                    id="input-k-vff" step="0.001" value="0"></div>
+                            <div class="input-group"><label>K_aff [V/(rad/s²)]</label><input type="number"
+                                    id="input-k-aff" step="0.001" value="0"></div>
+                        </div>
+                    </div>
+
+                    <div class="tuning-section">
+                        <div class="section-head-row">
+                            <h4>PID Position Loop</h4>
+                            <button id="btn-pos-loop" class="toggle-btn active"
+                                title="Disable to tune the velocity loop in isolation. Trajectory generator still runs and feeds the velocity loop directly.">Loop:
+                                ON</button>
+                        </div>
+                        <div class="input-row">
+                            <div class="input-group"><label>Kp</label><input type="number" id="input-pos-kp" step="0.1"
+                                    value="0.4"></div>
+                            <div class="input-group"><label>Ki</label><input type="number" id="input-pos-ki" step="0.01"
+                                    value="0.05"></div>
+                            <div class="input-group"><label>Kd</label><input type="number" id="input-pos-kd" step="0.01"
+                                    value="0.1"></div>
+                        </div>
+                    </div>
+
+                    <div class="tuning-section">
+                        <h4>S-Curve & Trajectory</h4>
+                        <div class="input-row" style="margin-bottom: 0.5rem">
+                            <div class="input-group" style="flex: 1;">
+                                <label>Velocity Profile</label>
+                                <select id="select-vel-profile" class="select-input" style="width: 100%; padding: 4px; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); color: #fff; border-radius: 4px;">
+                                    <option value="scurve">S-Curve (Smooth)</option>
+                                    <option value="trap">Trapezoidal (Linear Ramp)</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="input-row">
+                            <div class="input-group"><label>v_max [rad/s]</label><input type="number"
+                                    id="input-vmax-rad" step="0.1" value="7.304"></div>
+                            <div class="input-group"><label>a_max [rad/s²]</label><input type="number"
+                                    id="input-amax-rad" step="0.1" value="27.49"></div>
+                        </div>
+                        <div class="input-row">
+                            <div class="input-group" id="group-jmax"><label>j_max [rad/s³]</label><input type="number"
+                                    id="input-jmax-rad" step="10" value="1400"></div>
+                            <div class="input-group"><label>Min PWM</label><input type="number" id="input-min-pwm"
+                                    step="0.5" value="0.0"></div>
+                        </div>
+                        <div class="input-group"><label>Home Speed (RPM)</label><input type="number"
+                                id="input-home-speed" step="5" value="30"></div>
+                    </div>
+
+                    <div class="tuning-section">
+                        <h4>ZVD Shaper</h4>
+                        <div class="input-row">
+                            <div class="input-group"><label>ωₙ (Hz)</label><input type="number" id="input-shaper-wn"
+                                    step="0.1" min="0.1" value="12.13"></div>
+                            <div class="input-group"><label>ζ</label><input type="number" id="input-shaper-zeta"
+                                    step="0.001" min="0" max="0.999" value="0.041"></div>
+                        </div>
+                    </div>
+
+                    <div class="tuning-section">
+                        <h4>Jog & Step Settings</h4>
+                        <div class="input-row">
+                            <div class="input-group"><label>Fine RPM</label><input type="number" id="input-jog-fine"
+                                    step="1" value="10"></div>
+                            <div class="input-group" style="visibility:hidden"></div>
+                        </div>
+                        <div class="input-row">
+                            <div class="input-group"><label>Step (C)</label><input type="number" id="input-step-coarse"
+                                    step="1" value="10"></div>
+                            <div class="input-group"><label>Step (F)</label><input type="number" id="input-step-fine"
+                                    step="0.1" value="1.0"></div>
+                        </div>
+                    </div>
+
+                    <div class="tuning-section">
+                        <h4>Kalman Filter Q/R</h4>
+                        <div class="input-row">
+                            <div class="input-group"><label>σ θ (rad/√s)</label><input type="number" id="input-kf-q-theta"
+                                    step="0.001" value="0.001"></div>
+                            <div class="input-group"><label>σ ω (rad/s/√s)</label><input type="number" id="input-kf-q-omega"
+                                    step="0.01" value="0.1"></div>
+                        </div>
+                        <div class="input-row">
+                            <div class="input-group"><label>σ τ (N·m/√s)</label><input type="number" id="input-kf-q-tau"
+                                    step="0.05" value="0.5"></div>
+                            <div class="input-group"><label>σ i (A/√s)</label><input type="number" id="input-kf-q-i"
+                                    step="0.05" value="0.5"></div>
+                        </div>
+                        <div class="input-row">
+                            <div class="input-group"><label>R (rad²)</label><input type="number" id="input-kf-r" step="1e-9"
+                                    value="4.9e-8"></div>
+                            <div class="input-group" style="align-self:flex-end"><button id="btn-kf-apply-noise"
+                                    class="secondary-btn">Apply Q/R</button></div>
+                        </div>
+                    </div>
+                </div>
+                <button id="send-tuning-btn" class="secondary-btn">Apply All Parameters</button>
+            </div>
+
+
+            <div class="card manual-card">
+                <h3>Manual Override</h3>
+                <div class="manual-controls">
+                    <div class="input-group" id="target-pos-group">
+                        <label>Target Pos</label>
+                        <div class="flex-row target-input-row">
+                            <input type="range" id="range-target" min="0" max="180" value="0">
+                            <button id="btn-negate-target" class="toggle-btn"
+                                style="width:32px; padding:4px;">±</button>
+                            <input type="number" id="input-target" min="0" max="180" value="0">
+                            <button id="btn-set-target" class="primary-btn sm">Move</button>
+                        </div>
+                    </div>
+
+                    <div class="input-group" id="sine-gen-group" style="display:none">
+                        <label>Sine Wave Generator <span
+                                style="color:var(--accent-red);font-weight:normal">(velocity-loop test)</span></label>
+                        <div class="input-row">
+                            <div class="input-group"><label>Amplitude (RPM)</label><input type="number"
+                                    id="input-sine-amp" step="1" value="30"></div>
+                            <div class="input-group"><label>Frequency (Hz)</label><input type="number"
+                                    id="input-sine-freq" step="0.1" min="0" value="0.5"></div>
+                        </div>
+                        <button id="btn-sine-toggle" class="primary-btn sm" style="width:100%;margin-top:6px">Start
+                            Sine</button>
+                    </div>
+
+                    <div class="toggle-group manual-extra">
+                        <button id="btn-gripper-ud" class="toggle-btn">Gripper: UP</button>
+                        <button id="btn-gripper-co" class="toggle-btn">Claw: OPEN</button>
+                    </div>
+                    <div class="toggle-group manual-extra">
+                        <button id="btn-sys-mode" class="toggle-btn">Mode: BASE</button>
+                        <button id="btn-jog-mode" class="toggle-btn">Jog: COARSE</button>
+                    </div>
+                    <div class="toggle-group manual-extra">
+                        <button id="btn-override" class="toggle-btn warning">Override: OFF</button>
+                    </div>
+                    <div class="toggle-group">
+                        <button id="btn-fine-home" class="toggle-btn">Fine Home</button>
+                        <button id="btn-go-home" class="toggle-btn">Go to Home</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card kalman-card">
+                <div class="section-head-row">
+                    <h3>Kalman Filter</h3>
+                    <div class="kf-head-buttons">
+                        <button id="btn-kf-toggle" class="toggle-btn">KF: OFF</button>
+                        <button id="btn-kf-reset" class="toggle-btn"
+                            title="Re-anchor estimate to current encoder reading">Reset</button>
+                        <button id="btn-kf-sanity" class="toggle-btn"
+                            title="Overlay the open-loop model prediction to verify motor parameters">Model:
+                            OFF</button>
+                    </div>
+                </div>
+
+                <div class="kf-state-grid">
+                    <div class="kf-state-item"><label>θ̂ (deg)</label><span id="kf-theta" class="value">--</span></div>
+                    <div class="kf-state-item"><label>ω̂ (RPM)</label><span id="kf-omega" class="value">--</span></div>
+                    <div class="kf-state-item"><label>τ̂_L (N·m)</label><span id="kf-tau" class="value">--</span></div>
+                    <div class="kf-state-item"><label>î_a (A)</label><span id="kf-ia" class="value">--</span></div>
+                    <div class="kf-state-item small"><label>Innov.</label><span id="kf-innov" class="value">--</span>
+                    </div>
+                    <div class="kf-state-item small"><label>P00</label><span id="kf-p00" class="value">--</span></div>
+                    <div class="kf-state-item small"><label>P11</label><span id="kf-p11" class="value">--</span></div>
+                    <div class="kf-state-item small"><label>P22</label><span id="kf-p22" class="value">--</span></div>
+                </div>
+
+                <div class="kf-rmse-row">
+                    <div class="rmse-cell"><label>RMSE θ̂ vs meas</label><span id="kf-rmse-theta"
+                            class="value">--</span></div>
+                    <div class="rmse-cell"><label>RMSE ω̂ vs filt</label><span id="kf-rmse-omega"
+                            class="value">--</span></div>
+                </div>
+
+                </div>
+            </div>
+        </div>
+    </main>
+
+
+    <!-- Fault / Safety Modal -->
+    <div id="fault-modal" class="modal-backdrop hidden">
+        <div class="modal-window">
+            <div class="modal-header">
+                <h3>Fault Info & Safety Config</h3>
+                <button id="btn-close-modal" class="modal-close">×</button>
+            </div>
+            <div class="modal-section">
+                <h4>Active Faults</h4>
+                <div id="modal-fault-list">No active faults.</div>
+            </div>
+            <div class="modal-section">
+                <h4>Safety Checks (Enable / Disable)</h4>
+                <div class="safety-toggle-list">
+                    <details class="safety-detail">
+                        <summary class="safety-row">
+                            <span><span class="caret">▸</span> Stall Detection</span>
+                            <input type="checkbox" id="chk-safe-stall" checked onclick="event.stopPropagation()">
+                        </summary>
+                        <div class="trigger-desc">
+                            <strong>Triggers when:</strong>
+                            <ul>
+                                <li>PWM output ≥ <b>25%</b></li>
+                                <li>AND actual velocity &lt; <b>0.5 RPM</b></li>
+                                <li>AND position error &gt; <b>5°</b> (in POSITION/GHOST mode)</li>
+                                <li>Sustained for <b>2 seconds</b></li>
+                            </ul>
+                            <em>Cause:</em> motor blocked by obstacle, mechanical jam, or wiring fault.
+                        </div>
+                    </details>
+                    <details class="safety-detail">
+                        <summary class="safety-row">
+                            <span><span class="caret">▸</span> Encoder Check</span>
+                            <input type="checkbox" id="chk-safe-encoder" checked onclick="event.stopPropagation()">
+                        </summary>
+                        <div class="trigger-desc">
+                            <strong>Triggers when (either):</strong>
+                            <ul>
+                                <li><b>Phase inversion:</b> PWM &gt; 50% one way, RPM &gt; 5 RPM the other way</li>
+                                <li><b>Signal loss:</b> PWM &gt; 50%, RPM near 0, encoder counts frozen for 1 second
+                                </li>
+                            </ul>
+                            <em>Cause:</em> encoder cable disconnected, A/B swapped, or hardware fault.
+                        </div>
+                    </details>
+                    <details class="safety-detail">
+                        <summary class="safety-row">
+                            <span><span class="caret">▸</span> Over-Rotation</span>
+                            <input type="checkbox" id="chk-safe-overrot" checked onclick="event.stopPropagation()">
+                        </summary>
+                        <div class="trigger-desc">
+                            <strong>Triggers when:</strong>
+                            <ul>
+                                <li>Absolute position exceeds <b>±720°</b> (2 full turns) from home</li>
+                            </ul>
+                            <em>Cause:</em> wire-twist protection — prevents internal wiring from snapping.
+                        </div>
+                    </details>
+                    <details class="safety-detail">
+                        <summary class="safety-row">
+                            <span><span class="caret">▸</span> Joystick Check</span>
+                            <input type="checkbox" id="chk-safe-joy" checked onclick="event.stopPropagation()">
+                        </summary>
+                        <div class="trigger-desc">
+                            <strong>Triggers when:</strong>
+                            <ul>
+                                <li>ESP32 sends a packet with status byte indicating disconnected</li>
+                            </ul>
+                            <em>Cause:</em> joystick power off, Bluetooth/wireless link lost, or ESP32 fault.
+                        </div>
+                    </details>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Gripper Settings Modal -->
+    <div id="gripper-modal" class="modal-backdrop hidden">
+        <div class="modal-window">
+            <div class="modal-header">
+                <h3>Gripper Settings</h3>
+                <button id="btn-close-gripper-modal" class="modal-close">×</button>
+            </div>
+            <div class="modal-section">
+                <h4>Feedback Mode</h4>
+                <div class="mode-radio-group">
+                    <label class="radio-option">
+                        <input type="radio" name="gripper-mode" value="sim" id="radio-sim" checked>
+                        <span class="radio-content">
+                            <span class="radio-title">Simulation (Delay)</span>
+                            <span class="radio-desc">Uses configured delays to simulate sensor feedback</span>
+                        </span>
+                    </label>
+                    <label class="radio-option">
+                        <input type="radio" name="gripper-mode" value="real" id="radio-real">
+                        <span class="radio-content">
+                            <span class="radio-title">Real Sensor</span>
+                            <span class="radio-desc">Waits for reed switch state from STM32 telemetry</span>
+                        </span>
+                    </label>
+                </div>
+            </div>
+            <div class="modal-section" id="sim-delays-section">
+                <h4>Simulation Delays (ms)</h4>
+                <div class="input-row">
+                    <div class="input-group"><label>Open</label><input type="number" id="delay-open" value="600"
+                            step="100" min="0"></div>
+                    <div class="input-group"><label>Close</label><input type="number" id="delay-close" value="600"
+                            step="100" min="0"></div>
+                </div>
+                <div class="input-row" style="margin-top:0.5rem">
+                    <div class="input-group"><label>Up</label><input type="number" id="delay-up" value="600" step="100"
+                            min="0"></div>
+                    <div class="input-group"><label>Down</label><input type="number" id="delay-down" value="600"
+                            step="100" min="0"></div>
+                </div>
+            </div>
+            <div class="modal-section" id="real-sensor-info" style="display:none">
+                <h4>Real Sensor Info</h4>
+                <div class="real-sensor-desc">
+                    Each gripper action waits for the corresponding reed switch to confirm before proceeding.<br><br>
+                    <span class="pin-table">PB0 = Up &nbsp;|&nbsp; PA4 = Down &nbsp;|&nbsp; PA1 = Close &nbsp;|&nbsp;
+                        PA0 = Open</span><br><br>
+                    Timeout: 3000 ms (firmware <code>REED_SW_TIMEOUT_MS</code>)
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Step Response Config Modal -->
+    <div id="metrics-config-modal" class="modal-backdrop hidden">
+        <div class="modal-window">
+            <div class="modal-header">
+                <h3>Step Response Config</h3>
+                <button id="btn-close-metrics-modal" class="modal-close">×</button>
+            </div>
+            <div class="modal-section">
+                <h4>Settle Thresholds</h4>
+                <div class="input-row">
+                    <div class="input-group">
+                        <label>Velocity start (RPM)</label>
+                        <input type="number" id="cfg-vel-threshold" value="3.0" step="0.5" min="0">
+                    </div>
+                    <div class="input-group">
+                        <label>Pos tolerance (°)</label>
+                        <input type="number" id="cfg-pos-settle" value="2.0" step="0.5" min="0">
+                    </div>
+                </div>
+                <div class="input-row" style="margin-top:0.5rem">
+                    <div class="input-group">
+                        <label>Vel tolerance (RPM)</label>
+                        <input type="number" id="cfg-vel-settle" value="3.0" step="0.5" min="0">
+                    </div>
+                    <div class="input-group">
+                        <label>Settle hold (ms)</label>
+                        <input type="number" id="cfg-settle-ms" value="3000" step="100" min="0">
+                    </div>
+                </div>
+                <button id="btn-save-metrics-cfg" class="secondary-btn">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="debug-log">
+        <div class="log-header">Debug Console</div>
+        <div id="log-content"></div>
+    </div>
+
+    <script src="visualizer.js"></script>
+    <script src="charts.js"></script>
+    <script src="app.js"></script>
+    <script src="testing.js"></script>
+</body>
+
+</html>

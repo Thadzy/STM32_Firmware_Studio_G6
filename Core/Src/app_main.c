@@ -1089,7 +1089,18 @@ void Dashboard_ParseCommand(const char* cmd)
     else if (strncmp(cmd, "LAB SC_AMAX ", 12) == 0) { TuningParams.scurve.amax_rads2 = atof(cmd + 12); }
     else if (strncmp(cmd, "LAB SC_JMAX ", 12) == 0) { TuningParams.scurve.jmax_rads3 = atof(cmd + 12); }
     
-    /* Legacy triggers */
+    /* Kalman Filter tuning */
+    else if (strncmp(cmd, "LAB KF_Q_TH ", 12) == 0) { TuningParams.kalman.q_pos = atof(cmd + 12); }
+    else if (strncmp(cmd, "LAB KF_Q_W ", 11) == 0) { TuningParams.kalman.q_vel = atof(cmd + 11); }
+    else if (strncmp(cmd, "LAB KF_Q_TAU ", 13) == 0) { TuningParams.kalman.q_acc = atof(cmd + 13); }
+    else if (strncmp(cmd, "LAB KF_Q_I ", 11) == 0) { TuningParams.kalman.q_jerk = atof(cmd + 11); }
+    else if (strncmp(cmd, "LAB KF_R ", 9) == 0) { TuningParams.kalman.r_pos = atof(cmd + 9); }
+    
+    /* Safety Checks toggle */
+    else if (strncmp(cmd, "LAB SAFE_STALL ", 15) == 0) { RobotState.dbg.safety.en_tracking_safety = (atoi(cmd + 15) != 0); }
+    else if (strncmp(cmd, "LAB SAFE_ENC ", 13) == 0) { RobotState.dbg.safety.en_encoder_health = (atoi(cmd + 13) != 0); }
+    else if (strncmp(cmd, "LAB SAFE_OVER ", 14) == 0) { /* Wire-twist is always-on soft-limit watchdog */ }
+    else if (strncmp(cmd, "LAB SAFE_JOY ", 13) == 0) { /* Joy disconnect is automatic when mode=JOYSTICK */ }
     else if (strncmp(cmd, "LAB1_DECEL", 10) == 0) {
         if (RobotState.fsm == STATE_IDLE) {
             MotorCtrl_SetTarget(MotorCtrl_GetPosition_rad() + deg_to_rad(90.0f));

@@ -45,7 +45,7 @@ from typing import Optional
 # ── configuration ──────────────────────────────────────────────────────────
 _ROBOT_PORT: Optional[str] = sys.argv[1] if len(sys.argv) > 1 else None
 COM10_PORT   = "AUTO"    # auto-detect: tries COM11 then COM12, uses whichever is free
-WS_PORT      = 8765
+WS_PORT      = 8766
 BAUD         = 230400
 PARITY       = serial.PARITY_EVEN
 SLAVE_ADDR   = 21        # 0x15  Modbus slave address of the robot
@@ -195,7 +195,12 @@ def _http_server_thread() -> None:
     import http.server
     import socketserver
 
+    import os
+    web_dir = os.path.dirname(os.path.abspath(__file__))
+
     class QuietHandler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=web_dir, **kwargs)
         def log_message(self, format, *args):
             pass  # Suppress request spam in the console
 
@@ -204,7 +209,7 @@ def _http_server_thread() -> None:
         try:
             socketserver.TCPServer.allow_reuse_address = True
             with socketserver.TCPServer(("", port), QuietHandler) as httpd:
-                print(f"[http] Dashboard served at -> http://localhost:{port}/controller_dashboard.html")
+                print(f"[http] Dashboard served at -> http://localhost:{port}/index.html")
                 httpd.serve_forever()
         except OSError:
             port += 1
@@ -228,6 +233,49 @@ def _robot_reader(ser: serial.Serial) -> None:
     _last_fault_code = None
     _ctrl_was_active = False
     _tel_was_active  = False
+
+    _p2p_logging = False
+    _p2p_data = []
+
+    def _finish_p2p_log():
+        nonlocal _p2p_logging, _p2p_data
+        if not _p2p_data:
+            _p2p_logging = False
+            return
+
+        import datetime, csv, os
+        os.makedirs("exports", exist_ok=True)
+        now_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        csv_path = f"exports/p2p_run_{now_str}.csv"
+        try:
+            with open(csv_path, 'w', newline='') as f:
+                w = csv.writer(f)
+                w.writerow(["tick", "pos_deg", "vel_degs", "acc_degs2", "pwm"])
+                w.writerows(_p2p_data)
+            print(f"[LOGGER] Saved {len(_p2p_data)} samples to {csv_path}")
+        except Exception as e:
+            print(f"[LOGGER] Error saving CSV: {e}")
+
+        mat_path = f"exports/p2p_run_{now_str}.mat"
+        try:
+            import scipy.io
+            mat_dict = {
+                "tick": [row[0] for row in _p2p_data],
+                "pos_deg": [row[1] for row in _p2p_data],
+                "vel_degs": [row[2] for row in _p2p_data],
+                "acc_degs2": [row[3] for row in _p2p_data],
+                "pwm": [row[4] for row in _p2p_data]
+            }
+            scipy.io.savemat(mat_path, mat_dict)
+            print(f"[LOGGER] Saved MAT to {mat_path}")
+        except ImportError:
+            print("[LOGGER] scipy module not found. Skipping .mat export. Run 'pip install scipy' to enable.")
+        except Exception as e:
+            print(f"[LOGGER] Error saving MAT: {e}")
+
+        _p2p_data = []
+        _p2p_logging = False
 
     try:
         while not _stop.is_set():
@@ -259,17 +307,30 @@ def _robot_reader(ser: serial.Serial) -> None:
                         0x43: 'Safety: Position Tracking Jam'
                     }
                     if line.startswith('$ST,'):
-                        p = line.split(',')
-                        if len(p) >= 4:
-                            fsm = int(p[1]) if p[1].lstrip('-').isdigit() else 0
+                        parts = line.split(',')
+                        if len(parts) >= 4:
+                            fsm = int(parts[1]) if parts[1].lstrip('-').isdigit() else 0
                             fsm_n = _FSM.get(fsm, f'?{fsm}')
-                            run_mode = int(p[2]) if p[2].lstrip('-').isdigit() else 0
-                            fault = int(p[3]) if p[3].lstrip('-').isdigit() else 0
+                            run_mode = int(parts[2]) if parts[2].lstrip('-').isdigit() else 0
+                            fault = int(parts[3]) if parts[3].lstrip('-').isdigit() else 0
                             fault_desc = _FAULT_DESCS.get(fault, f'Unknown 0x{fault:02X}')
+                            
+                            _last_fsm_state = fsm
+                            _last_run_mode = run_mode
+                            _last_fault_code = fault
+
+                            # State transitions for P2P logger
+                            if _last_fsm_state == 3 and _last_run_mode == 3: # RUNNING + RUN_POINT
+                                if not _p2p_logging:
+                                    _p2p_logging = True
+                                    _p2p_data = []
+                                    print("[LOGGER] P2P move started. Logging data...")
+                            else:
+                                if _p2p_logging:
+                                    print("[LOGGER] P2P move ended. Exporting data...")
+                                    _finish_p2p_log()
+
                             if (fsm != _last_fsm_state) or (run_mode != _last_run_mode) or (fault != _last_fault_code):
-                                _last_fsm_state = fsm
-                                _last_run_mode = run_mode
-                                _last_fault_code = fault
                                 alert = '  *** ROBOT IN FAULT — press RESET button on hardware ***' \
                                         if fsm == 4 else ''
                                 print(f"[STATE] FSM={fsm_n:<7} | run_mode={run_mode} | fault=0x{fault:02X} ({fault_desc}){alert}")
@@ -333,6 +394,9 @@ def _robot_reader(ser: serial.Serial) -> None:
                             vel  = int(p[3]) / 10.0
                             acc  = int(p[4]) / 10.0
                             pwm  = int(p[5]) / 10.0
+                            
+                            if _p2p_logging:
+                                _p2p_data.append((tick, pos, vel, acc, pwm))
                             
                             is_active = (abs(vel) > 0.1) or (abs(pwm) > 1.0) or (_last_fsm_state in (1, 3))
                             if is_active:

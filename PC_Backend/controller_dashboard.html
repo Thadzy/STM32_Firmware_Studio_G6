@@ -439,6 +439,56 @@
         .text-emerald {
             color: var(--accent-emerald);
         }
+
+        .visualizer-split {
+            display: flex;
+            gap: 1rem;
+            height: 160px;
+        }
+
+        .visualizer-split canvas {
+            background: #111827;
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+        }
+
+        #robot-visualizer {
+            flex: 2;
+        }
+
+        #gripper-visualizer {
+            flex: 1;
+        }
+
+        /* ===== Redesigned Tuning Lab ===== */
+        .tl-top { padding: 0.6rem 0.75rem; border-bottom: 1px solid var(--border-color); display: flex; flex-direction: column; gap: 0.5rem; }
+        .tl-titlebar { display: flex; align-items: center; gap: 0.5rem; }
+        .tl-titlebar h3 { margin: 0; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--accent-cyan); flex-shrink: 0; }
+        .tl-jumps { display: flex; gap: 4px; flex-wrap: wrap; }
+        .tl-jumps .ws-chip { flex: 1 1 auto; padding: 4px; font-size: 0.65rem; background: rgba(255,255,255,0.05); border: 1px solid var(--border-color); border-radius: 4px; color: var(--text-secondary); cursor: pointer; text-align: center; }
+        .tl-jumps .ws-chip:hover { background: rgba(255,255,255,0.1); color: var(--text-primary); }
+        .tl-scroll { flex: 1 1 auto; overflow-y: auto; overflow-x: hidden; padding: 0 0.75rem; display: flex; flex-direction: column; scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.15) transparent; max-height: 500px; }
+        .tl-sec { padding: 0.75rem 0; border-bottom: 1px solid rgba(255,255,255,0.06); display: flex; flex-direction: column; gap: 0.5rem; }
+        .tl-sec:last-child { border-bottom: none; }
+        .tl-sec-head { display: flex; align-items: center; gap: 6px; }
+        .tl-sec-title { font-size: 0.75rem; font-weight: 600; color: var(--text-primary); flex: 1 1 auto; }
+        .tl-sec-sub { font-size: 0.6rem; color: var(--text-secondary); }
+        .tl-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+        .tl-pid-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 0.5rem; }
+        .tl-field { display: flex; flex-direction: column; gap: 4px; }
+        .tl-field label { font-size: 0.65rem; color: var(--text-secondary); }
+        .tl-field input { font-size: 0.8rem; padding: 6px; width: 100%; box-sizing: border-box; background: rgba(0,0,0,0.2); border: 1px solid var(--border-color); color: var(--text-primary); border-radius: 4px; }
+        .tl-unit { font-size: 0.55rem; color: var(--text-secondary); opacity: 0.7; }
+        .tl-apply-bar { padding: 0.75rem; border-top: 1px solid var(--border-color); }
+        .tl-apply-btn { width: 100%; padding: 0.5rem; font-weight: 600; }
+        
+        .tl-sec-head::before { content: ''; display: inline-block; width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+        #tl-sec-velocity .tl-sec-head::before { background: #ff6b00; box-shadow: 0 0 5px #ff6b00; }
+        #tl-sec-feedforward .tl-sec-head::before { background: #a855f7; box-shadow: 0 0 5px #a855f7; }
+        #tl-sec-position .tl-sec-head::before { background: #3b82f6; box-shadow: 0 0 5px #3b82f6; }
+        #tl-sec-trajectory .tl-sec-head::before { background: #10b981; box-shadow: 0 0 5px #10b981; }
+        #tl-sec-shaper .tl-sec-head::before { background: #f59e0b; box-shadow: 0 0 5px #f59e0b; }
+        #tl-sec-kalman .tl-sec-head::before { background: #ec4899; box-shadow: 0 0 5px #ec4899; }
     </style>
 </head>
 
@@ -459,6 +509,15 @@
     <main>
         <!-- Column 1: Status, Test, and Logs -->
         <div class="column-panel">
+            <!-- Visualizers -->
+            <div class="glass-card">
+                <div class="section-title">Live Kinematics</div>
+                <div class="visualizer-split">
+                    <canvas id="robot-visualizer"></canvas>
+                    <canvas id="gripper-visualizer"></canvas>
+                </div>
+            </div>
+
             <!-- Stats -->
             <div class="glass-card">
                 <div class="section-title">Robot Status</div>
@@ -523,98 +582,111 @@
         </div>
 
         <!-- Column 2: Tuning -->
-        <div class="column-panel">
-            <!-- Tuning Pane -->
-            <div class="glass-card">
-                <div class="section-title">Interactive PID Tuning</div>
-
-                <div class="control-group">
-                    <label>Target Loop</label>
-                    <select class="select-input" id="loop-select">
-                        <option value="0">Velocity Loop (Inner, 1 kHz)</option>
-                        <option value="1">Position Loop (Outer, 100 Hz)</option>
-                    </select>
+        <div class="column-panel control-card glass-card" style="padding: 0;">
+            <!-- Fixed top: title + jump chips -->
+            <div class="tl-top">
+                <div class="tl-titlebar">
+                    <h3>Tuning Lab</h3>
                 </div>
-
-                <div class="control-group">
-                    <label>Proportional Gain (Kp) <span class="unit-val" id="kp-val">0.000</span></label>
-                    <div class="slider-container">
-                        <input type="range" class="slider-input" id="kp-slider" min="0" max="10" step="0.001" value="0">
-                        <input type="number" class="number-input" id="kp-num" min="0" max="10" step="0.001"
-                            value="0.000">
-                    </div>
+                <!-- Jump anchors — scroll to section on click -->
+                <div class="tl-jumps">
+                    <button class="ws-chip" onclick="document.getElementById('tl-sec-velocity').scrollIntoView({behavior:'smooth'})">Velocity</button>
+                    <button class="ws-chip" onclick="document.getElementById('tl-sec-feedforward').scrollIntoView({behavior:'smooth'})">FF</button>
+                    <button class="ws-chip" onclick="document.getElementById('tl-sec-position').scrollIntoView({behavior:'smooth'})">Position</button>
+                    <button class="ws-chip" onclick="document.getElementById('tl-sec-trajectory').scrollIntoView({behavior:'smooth'})">S-Curve</button>
+                    <button class="ws-chip" onclick="document.getElementById('tl-sec-shaper').scrollIntoView({behavior:'smooth'})">Shaper</button>
+                    <button class="ws-chip" onclick="document.getElementById('tl-sec-kalman').scrollIntoView({behavior:'smooth'})">Kalman</button>
                 </div>
-
-                <div class="control-group">
-                    <label>Integral Gain (Ki) <span class="unit-val" id="ki-val">0.000</span></label>
-                    <div class="slider-container">
-                        <input type="range" class="slider-input" id="ki-slider" min="0" max="5" step="0.001" value="0">
-                        <input type="number" class="number-input" id="ki-num" min="0" max="5" step="0.001"
-                            value="0.000">
-                    </div>
-                </div>
-
-                <div class="control-group">
-                    <label>Derivative Gain (Kd) <span class="unit-val" id="kd-val">0.000</span></label>
-                    <div class="slider-container">
-                        <input type="range" class="slider-input" id="kd-slider" min="0" max="2" step="0.001" value="0">
-                        <input type="number" class="number-input" id="kd-num" min="0" max="2" step="0.001"
-                            value="0.000">
-                    </div>
-                </div>
-
-                <button class="btn" id="apply-btn">Apply PID Gains</button>
             </div>
 
-            <!-- Feedforward & S-Curve Tuning -->
-            <div class="glass-card">
-                <div class="section-title">Feedforward & Limits</div>
+            <!-- Scrollable parameter area -->
+            <div class="tl-scroll" id="tl-scroll">
 
-                <div class="control-group">
-                    <label>Velocity FF (PWM / rad/s) <span class="unit-val" id="ff-vel-val">3.030</span></label>
-                    <div class="slider-container">
-                        <input type="number" class="number-input" id="ff-vel-num" min="0" max="10" step="0.001"
-                            value="3.030" style="width:100%">
+                <!-- VELOCITY LOOP -->
+                <div class="tl-sec" id="tl-sec-velocity">
+                    <div class="tl-sec-head">
+                        <span class="tl-sec-title">Velocity Loop</span>
+                        <span class="tl-sec-sub">inner speed PID (1 kHz)</span>
+                    </div>
+                    <div class="tl-pid-grid">
+                        <div class="tl-field"><label>Kp</label><input type="number" id="input-speed-kp" step="0.01" value="1.58"></div>
+                        <div class="tl-field"><label>Ki</label><input type="number" id="input-speed-ki" step="0.01" value="0.5"></div>
+                        <div class="tl-field"><label>Kd</label><input type="number" id="input-speed-kd" step="0.001" value="0.0"></div>
                     </div>
                 </div>
 
-                <div class="control-group">
-                    <label>Accel FF (PWM / rad/s²) <span class="unit-val" id="ff-acc-val">0.100</span></label>
-                    <div class="slider-container">
-                        <input type="number" class="number-input" id="ff-acc-num" min="0" max="1" step="0.001"
-                            value="0.100" style="width:100%">
+                <!-- FEEDFORWARD -->
+                <div class="tl-sec" id="tl-sec-feedforward">
+                    <div class="tl-sec-head">
+                        <span class="tl-sec-title">Feedforward</span>
+                        <span class="tl-sec-sub">reduce tracking error</span>
+                    </div>
+                    <div class="tl-pid-grid">
+                        <div class="tl-field"><label>K_vff <span class="tl-unit">PWM/(rad/s)</span></label><input type="number" id="input-k-vff" step="0.001" value="3.03"></div>
+                        <div class="tl-field"><label>K_aff <span class="tl-unit">PWM/(rad/s²)</span></label><input type="number" id="input-k-aff" step="0.001" value="0.1"></div>
+                        <div class="tl-field"><label>K_tff <span class="tl-unit">PWM</span></label><input type="number" id="input-k-tff" step="0.01" value="0.0"></div>
                     </div>
                 </div>
 
-                <div class="control-group">
-                    <label>Disturbance FF (PWM) <span class="unit-val" id="ff-dis-val">0.000</span></label>
-                    <div class="slider-container">
-                        <input type="number" class="number-input" id="ff-dis-num" min="0" max="2" step="0.001"
-                            value="0.000" style="width:100%">
+                <!-- POSITION LOOP -->
+                <div class="tl-sec" id="tl-sec-position">
+                    <div class="tl-sec-head">
+                        <span class="tl-sec-title">Position Loop</span>
+                        <span class="tl-sec-sub">outer tracking (100 Hz)</span>
+                    </div>
+                    <div class="tl-pid-grid">
+                        <div class="tl-field"><label>Kp</label><input type="number" id="input-pos-kp" step="0.1" value="3.0"></div>
+                        <div class="tl-field"><label>Ki</label><input type="number" id="input-pos-ki" step="0.01" value="0.02"></div>
+                        <div class="tl-field"><label>Kd</label><input type="number" id="input-pos-kd" step="0.01" value="0.15"></div>
                     </div>
                 </div>
 
-                <hr style="border:0; border-top:1px solid var(--border-color); margin: 10px 0;">
-
-                <div class="control-group">
-                    <label>V_max (rad/s) <span class="unit-val" id="sc-vmax-val">7.304</span></label>
-                    <div class="slider-container">
-                        <input type="number" class="number-input" id="sc-vmax-num" min="1" max="20" step="0.001"
-                            value="7.304" style="width:100%">
+                <!-- S-CURVE -->
+                <div class="tl-sec" id="tl-sec-trajectory">
+                    <div class="tl-sec-head">
+                        <span class="tl-sec-title">S-Curve Trajectory</span>
+                        <span class="tl-sec-sub">motion limits</span>
+                    </div>
+                    <div class="tl-grid2">
+                        <div class="tl-field"><label>v_max <span class="tl-unit">rad/s</span></label><input type="number" id="input-vmax-rad" step="0.1" value="7.304"></div>
+                        <div class="tl-field"><label>a_max <span class="tl-unit">rad/s²</span></label><input type="number" id="input-amax-rad" step="0.1" value="27.49"></div>
+                        <div class="tl-field"><label>j_max <span class="tl-unit">rad/s³</span></label><input type="number" id="input-jmax-rad" step="10" value="1400"></div>
+                        <div class="tl-field"><label>Min PWM</label><input type="number" id="input-min-pwm" step="0.5" value="0.0"></div>
                     </div>
                 </div>
 
-                <div class="control-group">
-                    <label>A_max (rad/s²) <span class="unit-val" id="sc-amax-val">27.49</span></label>
-                    <div class="slider-container">
-                        <input type="number" class="number-input" id="sc-amax-num" min="1" max="100" step="0.01"
-                            value="27.49" style="width:100%">
+                <!-- ZVD SHAPER -->
+                <div class="tl-sec" id="tl-sec-shaper">
+                    <div class="tl-sec-head">
+                        <span class="tl-sec-title">ZVD Shaper</span>
+                        <span class="tl-sec-sub">vibration suppression</span>
+                    </div>
+                    <div class="tl-grid2">
+                        <div class="tl-field"><label>ωₙ <span class="tl-unit">Hz</span></label><input type="number" id="input-shaper-wn" step="0.1" min="0.1" value="12.13"></div>
+                        <div class="tl-field"><label>ζ</label><input type="number" id="input-shaper-zeta" step="0.001" min="0" max="0.999" value="0.041"></div>
                     </div>
                 </div>
 
-                <button class="btn btn-secondary" id="apply-ff-btn" style="margin-top: 10px;">Apply FF & Limits</button>
+                <!-- KALMAN -->
+                <div class="tl-sec" id="tl-sec-kalman">
+                    <div class="tl-sec-head">
+                        <span class="tl-sec-title">Kalman Filter</span>
+                        <span class="tl-sec-sub">Q / R noise variances</span>
+                    </div>
+                    <div class="tl-grid2">
+                        <div class="tl-field"><label>σ θ <span class="tl-unit">rad/√s</span></label><input type="number" id="input-kf-q-theta" step="0.001" value="0.001"></div>
+                        <div class="tl-field"><label>σ ω <span class="tl-unit">rad/s/√s</span></label><input type="number" id="input-kf-q-omega" step="0.01" value="0.1"></div>
+                        <div class="tl-field"><label>σ τ <span class="tl-unit">N·m/√s</span></label><input type="number" id="input-kf-q-tau" step="0.05" value="0.5"></div>
+                        <div class="tl-field"><label>R <span class="tl-unit">rad²</span></label><input type="number" id="input-kf-r" step="1e-9" value="4.9e-8"></div>
+                    </div>
+                </div>
+
+            </div><!-- end tl-scroll -->
+
+            <!-- Sticky apply bar -->
+            <div class="tl-apply-bar">
+                <button id="send-tuning-btn" class="btn tl-apply-btn">Apply All Parameters</button>
             </div>
-
         </div>
 
         <!-- Right charts panel -->
@@ -703,19 +775,6 @@
         const statFaultDesc = document.getElementById('stat-fault-desc');
         const statFaultBox = document.getElementById('stat-fault-box');
 
-        // Tuning controls
-        const loopSelect = document.getElementById('loop-select');
-        const kpSlider = document.getElementById('kp-slider');
-        const kpNum = document.getElementById('kp-num');
-        const kpValLabel = document.getElementById('kp-val');
-        const kiSlider = document.getElementById('ki-slider');
-        const kiNum = document.getElementById('ki-num');
-        const kiValLabel = document.getElementById('ki-val');
-        const kdSlider = document.getElementById('kd-slider');
-        const kdNum = document.getElementById('kd-num');
-        const kdValLabel = document.getElementById('kd-val');
-        const applyBtn = document.getElementById('apply-btn');
-
         // Test commands
         const jogCcwBtn = document.getElementById('jog-ccw-btn');
         const jogCwBtn = document.getElementById('jog-cw-btn');
@@ -727,14 +786,6 @@
         const stopBtn = document.getElementById('stop-btn');
         const gohomeBtn = document.getElementById('gohome-btn');
         const pauseBtn = document.getElementById('pause-btn');
-
-        // FF & Limits UI
-        const applyFfBtn = document.getElementById('apply-ff-btn');
-        const ffVelNum = document.getElementById('ff-vel-num');
-        const ffAccNum = document.getElementById('ff-acc-num');
-        const ffDisNum = document.getElementById('ff-dis-num');
-        const scVmaxNum = document.getElementById('sc-vmax-num');
-        const scAmaxNum = document.getElementById('sc-amax-num');
 
         // Chart definitions
         const maxPoints = 250; // rolling window size (2.5s of data)
@@ -820,98 +871,75 @@
         makeResponsive(velChart, 'velChart');
         makeResponsive(pwmChart, 'pwmChart');
 
-        // Sync inputs
-        function syncTuningInputs(kp, ki, kd) {
-            kpSlider.value = kp;
-            kpNum.value = kp.toFixed(3);
-            kpValLabel.textContent = kp.toFixed(3);
-
-            kiSlider.value = ki;
-            kiNum.value = ki.toFixed(3);
-            kiValLabel.textContent = ki.toFixed(3);
-
-            kdSlider.value = kd;
-            kdNum.value = kd.toFixed(3);
-            kdValLabel.textContent = kd.toFixed(3);
-        }
-
         function handleGainUpdate(loop, kp, ki, kd) {
             activeGains[loop] = { kp, ki, kd };
-            if (parseInt(loopSelect.value) === loop) {
-                syncTuningInputs(kp, ki, kd);
+            if (loop === 0) {
+                const elKp = document.getElementById('input-speed-kp');
+                const elKi = document.getElementById('input-speed-ki');
+                const elKd = document.getElementById('input-speed-kd');
+                if(elKp) elKp.value = kp.toFixed(3);
+                if(elKi) elKi.value = ki.toFixed(3);
+                if(elKd) elKd.value = kd.toFixed(3);
+            } else if (loop === 1) {
+                const elKp = document.getElementById('input-pos-kp');
+                const elKi = document.getElementById('input-pos-ki');
+                const elKd = document.getElementById('input-pos-kd');
+                if(elKp) elKp.value = kp.toFixed(3);
+                if(elKi) elKi.value = ki.toFixed(3);
+                if(elKd) elKd.value = kd.toFixed(3);
             }
         }
 
-        // Event listeners for tuning controls
-        loopSelect.addEventListener('change', () => {
-            const loop = parseInt(loopSelect.value);
-            const gains = activeGains[loop];
-            syncTuningInputs(gains.kp, gains.ki, gains.kd);
+        // New Tuning Lab Apply Handler
+        const sendTuningBtn = document.getElementById('send-tuning-btn');
+        if (sendTuningBtn) {
+            sendTuningBtn.addEventListener('click', () => {
+                // Send inner loop (Velocity)
+                sendWsMessage({ action: 'write_reg', reg: 0x36, val: 0 }); // AT_LOOP = 0
+                sendWsMessage({ action: 'write_reg', reg: 0x38, val: Math.round(parseFloat(document.getElementById('input-speed-kp').value || 0) * 1000) });
+                sendWsMessage({ action: 'write_reg', reg: 0x39, val: Math.round(parseFloat(document.getElementById('input-speed-ki').value || 0) * 1000) });
+                sendWsMessage({ action: 'write_reg', reg: 0x3A, val: Math.round(parseFloat(document.getElementById('input-speed-kd').value || 0) * 1000) });
+                sendWsMessage({ action: 'write_reg', reg: 0x33, val: 2 }); // APPLY
 
-            // Query current gains by telling the robot to switch loop
-            // which prompts the firmware to write the gains into registers
-            sendWsMessage({ action: 'write_reg', reg: 0x36, val: loop });
-        });
+                // Send outer loop (Position)
+                setTimeout(() => {
+                    sendWsMessage({ action: 'write_reg', reg: 0x36, val: 1 }); // AT_LOOP = 1
+                    sendWsMessage({ action: 'write_reg', reg: 0x38, val: Math.round(parseFloat(document.getElementById('input-pos-kp').value || 0) * 1000) });
+                    sendWsMessage({ action: 'write_reg', reg: 0x39, val: Math.round(parseFloat(document.getElementById('input-pos-ki').value || 0) * 1000) });
+                    sendWsMessage({ action: 'write_reg', reg: 0x3A, val: Math.round(parseFloat(document.getElementById('input-pos-kd').value || 0) * 1000) });
+                    sendWsMessage({ action: 'write_reg', reg: 0x33, val: 2 }); // APPLY
+                }, 50);
 
-        function setupSync(slider, num, label) {
-            slider.addEventListener('input', () => {
-                const val = parseFloat(slider.value);
-                num.value = val.toFixed(3);
-                label.textContent = val.toFixed(3);
+                // Send LAB commands for the rest
+                setTimeout(() => {
+                    const params = [
+                        { cmd: 'FF_VEL', id: 'input-k-vff' },
+                        { cmd: 'FF_ACC', id: 'input-k-aff' },
+                        { cmd: 'FF_DIS', id: 'input-k-tff' },
+                        { cmd: 'SC_VMAX', id: 'input-vmax-rad' },
+                        { cmd: 'SC_AMAX', id: 'input-amax-rad' },
+                        { cmd: 'SC_JMAX', id: 'input-jmax-rad' },
+                        { cmd: 'SC_MINPWM', id: 'input-min-pwm' },
+                        { cmd: 'ZV_WN', id: 'input-shaper-wn' },
+                        { cmd: 'ZV_ZETA', id: 'input-shaper-zeta' }
+                    ];
+                    params.forEach(p => {
+                        const el = document.getElementById(p.id);
+                        if (el && el.value) {
+                            sendWsMessage({ action: 'cmd', cmd: `LAB ${p.cmd} ${parseFloat(el.value).toFixed(3)}` });
+                        }
+                    });
+                    
+                    // Kalman Q/R
+                    const kf_q_th = document.getElementById('input-kf-q-theta');
+                    const kf_q_w = document.getElementById('input-kf-q-omega');
+                    if (kf_q_th && kf_q_th.value) sendWsMessage({ action: 'cmd', cmd: `LAB KF_Q_TH ${parseFloat(kf_q_th.value).toFixed(5)}` });
+                    if (kf_q_w && kf_q_w.value) sendWsMessage({ action: 'cmd', cmd: `LAB KF_Q_W ${parseFloat(kf_q_w.value).toFixed(5)}` });
+                    
+                    console.log('All tuning parameters pushed to STM32!');
+                }, 100);
             });
-            num.addEventListener('change', () => {
-                let val = parseFloat(num.value);
-                const min = parseFloat(slider.min);
-                const max = parseFloat(slider.max);
-                if (isNaN(val)) val = min;
-                if (val < min) val = min;
-                if (val > max) val = max;
-                num.value = val.toFixed(3);
-                slider.value = val;
-                label.textContent = val.toFixed(3);
-            });
-        }
-        setupSync(kpSlider, kpNum, kpValLabel);
-        setupSync(kiSlider, kiNum, kiValLabel);
-        setupSync(kdSlider, kdNum, kdValLabel);
-
-        // Apply Gains handler
-        applyBtn.addEventListener('click', () => {
-            const loop = parseInt(loopSelect.value);
-            const kpRaw = Math.round(parseFloat(kpSlider.value) * 1000);
-            const kiRaw = Math.round(parseFloat(kiSlider.value) * 1000);
-            const kdRaw = Math.round(parseFloat(kdSlider.value) * 1000);
-
-            // Send register writes sequentially
-            sendWsMessage({ action: 'write_reg', reg: 0x36, val: loop });       // AT_LOOP
-            sendWsMessage({ action: 'write_reg', reg: 0x38, val: kpRaw });      // KP
-            sendWsMessage({ action: 'write_reg', reg: 0x39, val: kiRaw });      // KI
-            sendWsMessage({ action: 'write_reg', reg: 0x3A, val: kdRaw });      // KD
-            sendWsMessage({ action: 'write_reg', reg: 0x33, val: 2 });          // AT_CMD = 2 (APPLY_GAINS)
-
-            // Instantly update activeGains cache locally
-            activeGains[loop] = { kp: kpRaw / 1000.0, ki: kiRaw / 1000.0, kd: kdRaw / 1000.0 };
-            console.log(`Applied gains: Loop ${loop} | Kp=${kpRaw / 1000} Ki=${kiRaw / 1000} Kd=${kdRaw / 1000}`);
-        });
-
-        // Apply FF & Limits handler
-        if (applyFfBtn) {
-            applyFfBtn.addEventListener('click', () => {
-                const vel = parseFloat(ffVelNum.value).toFixed(3);
-                const acc = parseFloat(ffAccNum.value).toFixed(3);
-                const dis = parseFloat(ffDisNum.value).toFixed(3);
-                const vmax = parseFloat(scVmaxNum.value).toFixed(3);
-                const amax = parseFloat(scAmaxNum.value).toFixed(3);
-
-                sendWsMessage({ action: 'cmd', cmd: `LAB FF_VEL ${vel}` });
-                sendWsMessage({ action: 'cmd', cmd: `LAB FF_ACC ${acc}` });
-                sendWsMessage({ action: 'cmd', cmd: `LAB FF_DIS ${dis}` });
-                sendWsMessage({ action: 'cmd', cmd: `LAB SC_VMAX ${vmax}` });
-                sendWsMessage({ action: 'cmd', cmd: `LAB SC_AMAX ${amax}` });
-
-                console.log(`Applied FF: Vel=${vel} Acc=${acc} Dis=${dis} | SCurve: Vmax=${vmax} Amax=${amax}`);
-            });
-        }
+        };
 
         // Jog triggers (note sign inversion to match GUI coordinate systems)
         jogCcwBtn.addEventListener('click', () => {
@@ -1135,6 +1163,7 @@
 
                     if (!isPaused) {
                         pushChartData(tick, tgt, pos, shp, p_act, p_err, v_cmd, v_act, v_err, pwm, pos_i, spd_i);
+                        if (window.robotViz) window.robotViz.update(p_act, tgt);
                     }
                 }
             }
@@ -1215,6 +1244,13 @@
 
         // Start connection
         connect();
+    </script>
+    <script src="visualizer.js"></script>
+    <script>
+        window.addEventListener('DOMContentLoaded', () => {
+            window.robotViz = new RobotVisualizer('robot-visualizer');
+            window.gripperViz = new GripperVisualizer('gripper-visualizer');
+        });
     </script>
 </body>
 
