@@ -137,6 +137,9 @@ static uint32_t s_test_dwell_start;        /* registers 0x12–0x21 = 16 slots =
 static uint8_t  s_seq_step;    /* current step index (0 = pick of pair 0)   */
 static bool     s_gripper_en;  /* gripper enabled in auto (reg 0x04)        */
 
+/* Software E-Stop from Dashboard */
+static bool       s_software_estop    = false;
+
 /* =========================================================================
    Helpers
    ========================================================================= */
@@ -1217,6 +1220,18 @@ void Dashboard_ParseCommand(const char* cmd)
                 s_run_mode  = RUN_TEST;
             }
         }
+    } else if (strncmp(cmd, "CMD:ESTOP=1", 11) == 0) {
+        s_software_estop = true;
+    } else if (strncmp(cmd, "CMD:CLEAR", 9) == 0) {
+        s_software_estop = false;
+        if (!HwIo_GetEStop() && RobotState.fsm == STATE_FAULT) {
+            RobotState.fsm                          = STATE_IDLE;
+            RobotState.comms.fault_code             = 0u;
+            RobotState.dbg.safety.tripped_encoder   = false;
+            RobotState.dbg.safety.tripped_boundary  = false;
+            RobotState.dbg.safety.tripped_current   = false;
+            RobotState.dbg.safety.tripped_tracking  = false;
+        }
     } else if (strncmp(cmd, "LAB4_CYCLE", 10) == 0) {
         if (RobotState.fsm == STATE_IDLE) {
             ModbusBridge_SetReg(0x22, 1); /* 1 pair */
@@ -1283,7 +1298,7 @@ void App_Run(void)
 {
     /* Poll sensors into RobotState (non-ISR sensors) */
     /* E-stop: NC contact on PA5 — polarity inverted in hw_io.c (HIGH=active) */
-    RobotState.sensors.estop         = HwIo_GetEStop();
+    RobotState.sensors.estop         = HwIo_GetEStop() || s_software_estop;
     RobotState.sensors.selected_mode = HwIo_GetSelectedMode();
     RobotState.sensors.reset_btn     = HwIo_GetResetBtn();
     RobotState.sensors.proximity     = HwIo_GetProximity();
@@ -1369,9 +1384,9 @@ void App_Run(void)
     /* Run main FSM */
     fsm_run();
 
-    /* Pilot Lamp logic: Red (Relay OFF, GPIO_PIN_SET) when in FAULT.
+    /* Pilot Lamp logic: Red (Relay OFF, GPIO_PIN_SET) when in FAULT or E-STOP pressed.
        Green (Relay ON, GPIO_PIN_RESET) when healthy. */
-    if (RobotState.fsm == STATE_FAULT) {
+    if (RobotState.fsm == STATE_FAULT || RobotState.sensors.estop) {
         HAL_GPIO_WritePin(Relay_SysStatus_GPIO_Port, Relay_SysStatus_Pin, GPIO_PIN_SET);
     } else {
         HAL_GPIO_WritePin(Relay_SysStatus_GPIO_Port, Relay_SysStatus_Pin, GPIO_PIN_RESET);
