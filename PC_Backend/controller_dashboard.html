@@ -586,10 +586,11 @@
             <!-- Fixed top: title + jump chips -->
             <div class="tl-top">
                 <div class="tl-titlebar">
-                    <h3>Tuning Lab</h3>
+                    <h3 id="tab-tuning" style="cursor: pointer; padding-bottom: 4px; border-bottom: 2px solid var(--accent-cyan); transition: all 0.2s;">Tuning Lab</h3>
+                    <h3 id="tab-test" style="cursor: pointer; padding-bottom: 4px; border-bottom: 2px solid transparent; color: var(--text-secondary); transition: all 0.2s;">Test Mode</h3>
                 </div>
-                <!-- Jump anchors — scroll to section on click -->
-                <div class="tl-jumps">
+                <!-- Jump anchors — scroll to section on click (only visible in Tuning Lab) -->
+                <div class="tl-jumps" id="tl-jumps">
                     <button class="ws-chip" onclick="document.getElementById('tl-sec-velocity').scrollIntoView({behavior:'smooth'})">Velocity</button>
                     <button class="ws-chip" onclick="document.getElementById('tl-sec-feedforward').scrollIntoView({behavior:'smooth'})">FF</button>
                     <button class="ws-chip" onclick="document.getElementById('tl-sec-position').scrollIntoView({behavior:'smooth'})">Position</button>
@@ -597,6 +598,66 @@
                     <button class="ws-chip" onclick="document.getElementById('tl-sec-shaper').scrollIntoView({behavior:'smooth'})">Shaper</button>
                     <button class="ws-chip" onclick="document.getElementById('tl-sec-kalman').scrollIntoView({behavior:'smooth'})">Kalman</button>
                 </div>
+            </div>
+
+            <!-- TEST MODE AREA (Hidden by default) -->
+            <div class="tl-scroll" id="test-mode-scroll" style="display: none; padding-top: 1rem; gap: 1.5rem;">
+                
+                <!-- Precision Test -->
+                <div class="glass-card" style="background: rgba(0,0,0,0.2); border-color: rgba(139, 92, 246, 0.3);">
+                    <div class="section-title" style="color: var(--accent-purple);">
+                        Precision Test
+                        <span style="font-size: 0.65rem; color: var(--text-secondary); text-transform: none;">Point-to-Point Oscillation</span>
+                    </div>
+                    
+                    <div class="tl-grid2" style="margin-bottom: 1rem;">
+                        <div class="tl-field">
+                            <label>Initial Position <span class="tl-unit">(Index)</span></label>
+                            <input type="number" id="test-prec-init" value="1" style="font-size: 1rem; padding: 0.5rem; text-align: center;">
+                        </div>
+                        <div class="tl-field">
+                            <label>Target Position <span class="tl-unit">(Index)</span></label>
+                            <input type="number" id="test-prec-target" value="5" style="font-size: 1rem; padding: 0.5rem; text-align: center;">
+                        </div>
+                    </div>
+                    
+                    <div class="tl-field" style="margin-bottom: 1.25rem;">
+                        <label>Repeats <span class="tl-unit">(65531 = max)</span></label>
+                        <input type="number" id="test-prec-repeats" value="10" style="font-size: 1rem; padding: 0.5rem; text-align: center;">
+                    </div>
+                    
+                    <button id="start-prec-btn" class="btn" style="background: var(--accent-purple); color: white; box-shadow: 0 4px 12px rgba(139, 92, 246, 0.4);">
+                        ▶ START PRECISION TEST
+                    </button>
+                </div>
+
+                <!-- Performance Test -->
+                <div class="glass-card" style="background: rgba(0,0,0,0.2); border-color: rgba(249, 115, 22, 0.3);">
+                    <div class="section-title" style="color: var(--accent-orange);">
+                        Performance Test
+                        <span style="font-size: 0.65rem; color: var(--text-secondary); text-transform: none;">Endless Speed Sweep</span>
+                    </div>
+                    
+                    <div style="font-size: 0.7rem; color: var(--text-secondary); margin-bottom: 1rem; line-height: 1.4; background: rgba(255,255,255,0.05); padding: 0.5rem; border-radius: 6px;">
+                        <i style="color: var(--accent-orange);">Note:</i> This test loops infinitely between the <strong>Initial</strong> and <strong>Target</strong> indices defined in the Precision Test above. Click the global Soft Stop to halt it.
+                    </div>
+
+                    <div class="tl-grid2" style="margin-bottom: 1.25rem;">
+                        <div class="tl-field">
+                            <label>Max Velocity <span class="tl-unit">(rad/s)</span></label>
+                            <input type="number" id="test-perf-vel" value="15" step="1" style="font-size: 1rem; padding: 0.5rem; text-align: center;">
+                        </div>
+                        <div class="tl-field">
+                            <label>Max Accel <span class="tl-unit">(rad/s²)</span></label>
+                            <input type="number" id="test-perf-acc" value="40" step="1" style="font-size: 1rem; padding: 0.5rem; text-align: center;">
+                        </div>
+                    </div>
+                    
+                    <button id="start-perf-btn" class="btn" style="background: var(--accent-orange); color: white; box-shadow: 0 4px 12px rgba(249, 115, 22, 0.4);">
+                        ▶ START PERFORMANCE TEST
+                    </button>
+                </div>
+
             </div>
 
             <!-- Scrollable parameter area -->
@@ -987,6 +1048,73 @@
             pauseBtn.textContent = isPaused ? "Resume Graph" : "Pause Graph";
             pauseBtn.classList.toggle('btn-secondary', !isPaused);
         });
+
+        // --- TEST MODE TABS ---
+        const tabTuning = document.getElementById('tab-tuning');
+        const tabTest = document.getElementById('tab-test');
+        const scrollTuning = document.getElementById('tl-scroll');
+        const scrollTest = document.getElementById('test-mode-scroll');
+        const tlJumps = document.getElementById('tl-jumps');
+
+        tabTuning.addEventListener('click', () => {
+            tabTuning.style.color = 'var(--text-primary)';
+            tabTuning.style.borderBottomColor = 'var(--accent-cyan)';
+            tabTuning.style.opacity = '1';
+            
+            tabTest.style.color = 'var(--text-secondary)';
+            tabTest.style.borderBottomColor = 'transparent';
+            tabTest.style.opacity = '0.5';
+
+            scrollTuning.style.display = 'flex';
+            if (tlJumps) tlJumps.style.display = 'flex';
+            scrollTest.style.display = 'none';
+        });
+
+        tabTest.addEventListener('click', () => {
+            tabTest.style.color = 'var(--text-primary)';
+            tabTest.style.borderBottomColor = 'var(--accent-cyan)';
+            tabTest.style.opacity = '1';
+
+            tabTuning.style.color = 'var(--text-secondary)';
+            tabTuning.style.borderBottomColor = 'transparent';
+            tabTuning.style.opacity = '0.5';
+
+            scrollTest.style.display = 'flex';
+            scrollTest.style.flexDirection = 'column';
+            scrollTuning.style.display = 'none';
+            if (tlJumps) tlJumps.style.display = 'none';
+        });
+
+        // --- TEST MODE HANDLERS ---
+        const btnPrec = document.getElementById('start-prec-btn');
+        if (btnPrec) {
+            btnPrec.addEventListener('click', () => {
+                const init = parseInt(document.getElementById('test-prec-init').value) || 1;
+                const target = parseInt(document.getElementById('test-prec-target').value) || 5;
+                const repeats = parseInt(document.getElementById('test-prec-repeats').value) || 10;
+                
+                // Base System Modbus sequence for Precision Test
+                sendWsMessage({ action: 'write_reg', reg: 0x01, val: 16 }); // Mode 16 (Test)
+                sendWsMessage({ action: 'write_reg', reg: 0x06, val: 0 });  // Precision Test
+                sendWsMessage({ action: 'write_reg', reg: 0x09, val: init });
+                sendWsMessage({ action: 'write_reg', reg: 0x10, val: target });
+                sendWsMessage({ action: 'write_reg', reg: 0x11, val: repeats }); // Triggers the test
+            });
+        }
+
+        const btnPerf = document.getElementById('start-perf-btn');
+        if (btnPerf) {
+            btnPerf.addEventListener('click', () => {
+                const vel = parseInt(document.getElementById('test-perf-vel').value) || 15;
+                const acc = parseInt(document.getElementById('test-perf-acc').value) || 40;
+                
+                // Base System Modbus sequence for Performance Test
+                sendWsMessage({ action: 'write_reg', reg: 0x01, val: 16 }); // Mode 16 (Test)
+                sendWsMessage({ action: 'write_reg', reg: 0x06, val: 1 });  // Performance Test
+                sendWsMessage({ action: 'write_reg', reg: 0x07, val: vel });
+                sendWsMessage({ action: 'write_reg', reg: 0x08, val: acc }); // Triggers the test
+            });
+        }
 
         // Send WebSocket packet helper
         function sendWsMessage(obj) {
