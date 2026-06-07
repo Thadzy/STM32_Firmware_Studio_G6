@@ -1017,6 +1017,10 @@ function tuningTick() {
     switch (tuningState) {
         case 'ARMED':
             if (vel > TUNE_VEL_THRESHOLD || Math.abs(state.currentPos - tuningStartPos) > 1.0) {
+                // Motor started moving! The firmware has definitely processed the command.
+                // Latch the TRUE absolute target from firmware (which correctly includes the physical home offset).
+                tuningMoveTarget = state.firmwareTarget;
+                
                 tuningState = 'CAPTURING';
                 tuningStartTime = now;
                 tuningStartPos = state.currentPos;
