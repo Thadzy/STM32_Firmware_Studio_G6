@@ -169,6 +169,18 @@ static void apply_reg_write(uint8_t addr, uint16_t val)
         g_at.new_kd      = (float)(int16_t)val / 1000.0f;
         break;
 
+    case 0x08: /* Base System Performance Test Trigger */
+        if ((s_regs[0x01] & 0x1F) == 16 && s_regs[0x06] == 1) {
+            s_regs[0x01] |= 0x8000u;
+        }
+        break;
+
+    case 0x11: /* Base System Precision Test Trigger */
+        if ((s_regs[0x01] & 0x1F) == 16 && s_regs[0x06] == 0) {
+            s_regs[0x01] |= 0x8000u;
+        }
+        break;
+
     default:
         break;
     }

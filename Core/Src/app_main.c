@@ -902,8 +902,8 @@ static void fsm_run(void)
             MotorCtrl_SetTarget(0.0f);
             s_user_home_rad = 0.0f;
             RobotState.status.is_homed = true;
-        } else if (mode_reg & 0x10u) {                  /* Test  */
-            ModbusBridge_SetReg(0x01, 0);
+        } else if ((mode_reg & 0x10u) && (mode_reg & 0x8000u)) {  /* Test Triggered */
+            ModbusBridge_SetReg(0x01, 0x10u); /* Clear the trigger flag, keep Mode 16 */
             s_test_type           = ModbusBridge_GetReg(0x06);
             s_test_pos_a          = (int16_t)ModbusBridge_GetReg(0x09);
             s_test_pos_b          = (int16_t)ModbusBridge_GetReg(0x10);
