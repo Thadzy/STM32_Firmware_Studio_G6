@@ -618,15 +618,6 @@ static void handle_joystick(void)
 #else
         if (s_jog_step_active) { MotorCtrl_JogStepDisengage(); s_jog_step_active = false; }
 #endif
-#if !DISABLE_ALL_FAULTS
-        if (RobotState.fsm != STATE_FAULT) {
-            MotorCtrl_Stop();
-            RobotState.fsm = STATE_FAULT;
-            RobotState.comms.fault_code = 0x11u; /* 0x11 for joystick connection lost */
-            s_run_mode = RUN_IDLE;
-            set_task(0x0000);
-        }
-#endif
         return;
     }
 
