@@ -919,12 +919,6 @@ static void fsm_run(void)
                 if (raw_a > 0) TuningParams.scurve.amax_rads2 = (float)raw_a;
             }
 
-            /* Base System UI flaw: it sends default parameters (e.g. 5, 5) immediately 
-               on Tab Switch before the user clicks Start. We ignore it if start and end are identical. */
-            if (s_test_pos_a == s_test_pos_b) {
-                return; 
-            }
-
             uint16_t unit = ModbusBridge_GetReg(0x23);
             MotorCtrl_SetTarget(resolve_target(s_test_pos_b, unit));
             
