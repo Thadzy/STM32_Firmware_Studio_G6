@@ -111,11 +111,11 @@ All values hardware-measured / system-identified. **Never change without asking 
 
 ## E-stop Wiring (resolved)
 
-E-stop switch is **NO, wired to VCC** (pin floats LOW when open, goes HIGH when pressed).
+E-stop switch is **Normally Open (NO), wired to GND** (pin floats HIGH via PULLUP when open, goes LOW when pressed).
 
-- `hw_io.c HwIo_Init()`: explicitly calls `HAL_GPIO_Init` with `GPIO_PULLDOWN` to hold pin LOW during normal operation. This overrides CubeMX and guarantees no false trigger from floating.
-- `hw_io.c HwIo_Poll100Hz()`: checks `GPIO_PIN_SET` (HIGH = active). One HIGH read clears immediately; 8 consecutive HIGHs trigger.
-- `app_main.c fsm_run()`: estop check **re-enabled** — was disabled only for the old NC false-trigger issue.
+- `hw_io.c HwIo_Init()`: explicitly calls `HAL_GPIO_Init` with `GPIO_PULLUP` to hold pin HIGH during normal operation. This overrides CubeMX and guarantees no false trigger from floating.
+- `hw_io.c HwIo_Poll100Hz()`: checks `GPIO_PIN_RESET` (LOW = active). One LOW read clears immediately; consecutive LOW reads trigger.
+- `app_main.c fsm_run()`: estop check also looks for `GPIO_PIN_RESET` during verification.
 
 ## Known Fixes
 

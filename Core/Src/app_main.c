@@ -1230,6 +1230,8 @@ void App_Run(void)
         RobotState.dbg.joy_conn = (uint8_t)_j.connected;
         RobotState.dbg.pos_deg  = rad_to_deg(MotorCtrl_GetPosition_rad());
         RobotState.dbg.vel_dps  = RobotState.motion.velocity_rps * 360.0f;
+        RobotState.dbg.estop_raw_pin = (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_SET) ? 1 : 0;
+        RobotState.dbg.reset_raw_pin = (HAL_GPIO_ReadPin(Reset_Btn_GPIO_Port, Reset_Btn_Pin) == GPIO_PIN_SET) ? 1 : 0;
         if (RobotState.comms.fault_code != 0u) {
             RobotState.dbg.last_fault = RobotState.comms.fault_code;
         }

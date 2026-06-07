@@ -98,6 +98,7 @@ typedef struct {
         bool zvd_bypass;
         volatile bool estop_disabled;
         uint8_t estop_raw_pin;
+        uint8_t reset_raw_pin;
         uint8_t pc9_output;
 
         /* Software Safety Stack -------------------------------------------
