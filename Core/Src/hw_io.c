@@ -49,16 +49,15 @@ static void debounce_update(Debounce_t *d, bool raw)
 
 void HwIo_Init(void)
 {
-    /* E-stop: NO switch wired to VCC. Explicitly set PULLDOWN so pin is held
-       LOW during normal operation. This overrides CubeMX and guarantees no
-       false trigger from floating.
-       Open (normal) → PULLDOWN pulls pin LOW → inactive.
-       Pressed (closed to VCC) → pin HIGH → active. */
+    /* E-stop: NC switch wired to GND.
+       Explicitly set PULLUP so pin is pulled HIGH when the switch opens.
+       Closed (normal) → GND → pin LOW → inactive.
+       Pressed (open) → PULLUP pulls pin HIGH → active. */
     {
         GPIO_InitTypeDef g = {0};
         g.Pin   = E_Stop_Pin;
         g.Mode  = GPIO_MODE_INPUT;
-        g.Pull  = GPIO_PULLDOWN;
+        g.Pull  = GPIO_PULLUP;
         g.Speed = GPIO_SPEED_FREQ_LOW;
         HAL_GPIO_Init(E_Stop_GPIO_Port, &g);
     }
@@ -117,9 +116,9 @@ void HwIo_Init(void)
 
 void HwIo_Poll100Hz(void)
 {
-    /* E-Stop: active HIGH (NO to VCC, PULLDOWN on PA5).
-       Normal = contact open = pulled LOW = inactive.
-       Pressed = contact closes to VCC = HIGH = active.
+    /* E-Stop: active HIGH (NC to GND, PULLUP on PA5).
+       Normal = contact closed to GND = LOW = inactive.
+       Pressed = contact open = pulled HIGH = active.
        Consecutive HIGH reads = trigger; one LOW read = immediate clear. */
     if (HAL_GPIO_ReadPin(E_Stop_GPIO_Port, E_Stop_Pin) == GPIO_PIN_SET) {
         if (s_estop_count < ESTOP_DEBOUNCE_THRESHOLD) {
