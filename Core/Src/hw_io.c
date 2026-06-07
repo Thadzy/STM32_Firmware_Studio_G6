@@ -164,10 +164,10 @@ void HwIo_Poll100Hz(void)
     if (s_proximity.state && !s_prox_prev_isr) s_prox_latch = true;
     s_prox_prev_isr = s_proximity.state;
 
-    /* Reset button: NC switch wired to GND (active HIGH when open due to PULLUP on PA7).
+    /* Reset button: NO switch wired to GND (active LOW due to PULLUP on PA7).
        20-tick (200 ms) debounce rejects motor-PWM EMI false resets.             */
     {
-        bool raw = (HAL_GPIO_ReadPin(Reset_Btn_GPIO_Port, Reset_Btn_Pin) == GPIO_PIN_SET);
+        bool raw = (HAL_GPIO_ReadPin(Reset_Btn_GPIO_Port, Reset_Btn_Pin) == GPIO_PIN_RESET);
         if (raw == s_reset_btn.state) {
             s_reset_btn.count = 0u;
         } else if (++s_reset_btn.count >= RESET_BTN_DEBOUNCE_TICKS) {
