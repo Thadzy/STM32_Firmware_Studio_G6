@@ -928,21 +928,18 @@ static void fsm_run(void)
                 int16_t raw_a = (int16_t)ModbusBridge_GetReg(0x08);
                 if (raw_v > 0) TuningParams.scurve.vmax_rads = (float)raw_v;
                 if (raw_a > 0) TuningParams.scurve.amax_rads2 = (float)raw_a;
-
-                /* The Base System UI for Performance Test does NOT send Initial Position, 
-                   Target Position, or Repeats. We must hardcode a safe sweep! 
-                   We will safely oscillate between Hole 1 (0 deg) and Hole 36 (180 deg) infinitely. */
-                s_test_rad_a = 0.0f;
-                s_test_rad_b = deg_to_rad(180.0f);
-                s_test_repeats_target = 65000u; // 65000 is treated as infinite in RUN_TEST
-            } else { /* Precision */
-                uint16_t unit = ModbusBridge_GetReg(0x23);
-                /* Resolve absolute radian targets ONCE at the start of the test.
-                   This completely prevents the directional logic in resolve_target() 
-                   from accumulating revolutions infinitely over many repeats! */
-                s_test_rad_a = resolve_target(s_test_pos_a, unit);
-                s_test_rad_b = resolve_target(s_test_pos_b, unit);
+                
+                /* In Performance Test, the user expects it to run endlessly until STOP.
+                   If they didn't specify repeats, default to infinite. */
+                if (s_test_repeats_target == 0) s_test_repeats_target = 65000u;
             }
+
+            uint16_t unit = ModbusBridge_GetReg(0x23);
+            /* Resolve absolute radian targets ONCE at the start of the test.
+               This completely prevents the directional logic in resolve_target() 
+               from accumulating revolutions infinitely over many repeats! */
+            s_test_rad_a = resolve_target(s_test_pos_a, unit);
+            s_test_rad_b = resolve_target(s_test_pos_b, unit);
 
             MotorCtrl_SetTarget(s_test_rad_b);
             
