@@ -1023,7 +1023,6 @@ function tuningTick() {
                 
                 tuningState = 'CAPTURING';
                 tuningStartTime = now;
-                tuningStartPos = state.currentPos;
                 tuningDir = (tuningMoveTarget - tuningStartPos) >= 0 ? 1 : -1;
                 // Reset chart runs so t=0 begins at motor start (absolute/relative target)
                 const relTarget = (tuningMoveTarget - tuningStartPos) * tuningDir;
