@@ -23,6 +23,10 @@ typedef struct {
 
     FsmState_t fsm;             /* current FSM state                        */
 
+    struct {
+        bool is_homed;          /* true once physical optical homing completes */
+    } status;
+
     /* --- Sensors (written by HwIo_Poll100Hz — called from TIM6 ISR) ------ */
     struct {
         volatile bool     estop;           /* latches true after 80 ms LOW   */
@@ -100,6 +104,9 @@ typedef struct {
         uint8_t estop_raw_pin;
         uint8_t reset_raw_pin;
         uint8_t pc9_output;
+        
+        bool gripper_use_delay;    /* 1 = ignore reed switches, use fixed delay */
+        uint16_t gripper_delay_ms; /* delay to use in ms (default 500) */
 
         /* Software Safety Stack -------------------------------------------
            en_*     : set false to disable a guard during commissioning

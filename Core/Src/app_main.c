@@ -210,12 +210,18 @@ static void gripper_seq_run(void)
 {
     uint32_t now     = HAL_GetTick();
     bool     timeout = (now - s_grip_t) >= GRIP_TIMEOUT_MS;
+    bool     delay_met = RobotState.dbg.gripper_use_delay && ((now - s_grip_t) >= RobotState.dbg.gripper_delay_ms);
+    
+    /* Function to check if we should advance to the next sequence step */
+    bool should_advance(bool reed_state) {
+        return delay_met || timeout || (!RobotState.dbg.gripper_use_delay && reed_state);
+    }
 
     switch (s_grip) {
     case GRIP_IDLE: break;
 
     case GRIP_PICK_DOWN:
-        if (HwIo_GetReedSwitch(REED_DOWN) || timeout) {
+        if (should_advance(HwIo_GetReedSwitch(REED_DOWN))) {
             Gripper_SetClaw(false);    /* close — grab object */
             s_grip_t = now;
             s_grip   = GRIP_PICK_CLOSE;
@@ -223,7 +229,7 @@ static void gripper_seq_run(void)
         break;
 
     case GRIP_PICK_CLOSE:
-        if (HwIo_GetReedSwitch(REED_CLOSE) || timeout) {
+        if (should_advance(HwIo_GetReedSwitch(REED_CLOSE))) {
             Gripper_SetVertical(true); /* lift with object */
             s_grip_t = now;
             s_grip   = GRIP_PICK_UP;
@@ -231,14 +237,14 @@ static void gripper_seq_run(void)
         break;
 
     case GRIP_PICK_UP:
-        if (HwIo_GetReedSwitch(REED_UP) || timeout) {
+        if (should_advance(HwIo_GetReedSwitch(REED_UP))) {
             s_grip = GRIP_IDLE;
             ModbusBridge_SetReg(0x03, 0); /* sequence complete */
         }
         break;
 
     case GRIP_PLACE_DOWN:
-        if (HwIo_GetReedSwitch(REED_DOWN) || timeout) {
+        if (should_advance(HwIo_GetReedSwitch(REED_DOWN))) {
             Gripper_SetClaw(true);     /* open — release object */
             s_grip_t = now;
             s_grip   = GRIP_PLACE_OPEN;
@@ -246,7 +252,7 @@ static void gripper_seq_run(void)
         break;
 
     case GRIP_PLACE_OPEN:
-        if (HwIo_GetReedSwitch(REED_OPEN) || timeout) {
+        if (should_advance(HwIo_GetReedSwitch(REED_OPEN))) {
             Gripper_SetVertical(true); /* lift empty */
             s_grip_t = now;
             s_grip   = GRIP_PLACE_UP;
@@ -254,7 +260,7 @@ static void gripper_seq_run(void)
         break;
 
     case GRIP_PLACE_UP:
-        if (HwIo_GetReedSwitch(REED_UP) || timeout) {
+        if (should_advance(HwIo_GetReedSwitch(REED_UP))) {
             s_grip = GRIP_IDLE;
             ModbusBridge_SetReg(0x03, 0); /* sequence complete */
         }
@@ -476,6 +482,7 @@ static void homing_run(void)
             MotorCtrl_SetZvdBypass(true);   /* keep ZVD off until rod is attached and ZVD params are re-tuned */
             MotorCtrl_SetTarget(s_user_home_rad);
             Joystick_SendAudio('H'); /* @H = homing complete */
+            RobotState.status.is_homed = true;
         }
         s_hom           = HOM_IDLE;
         s_move_start_ms = HAL_GetTick();
@@ -824,9 +831,18 @@ static void fsm_run(void)
         set_task(0x0000);
         if (mode_reg & 0x01u) {                         /* Home             */
             ModbusBridge_SetReg(0x01, 0);
-            RobotState.fsm = STATE_HOMING;
-            s_hom       = HOM_INIT;
-            set_task(0x0001);
+            if (!RobotState.status.is_homed) {
+                RobotState.fsm = STATE_HOMING;
+                s_hom       = HOM_INIT;
+                set_task(0x0001);
+            } else {
+                MotorCtrl_SyncTrajectory();
+                MotorCtrl_SetTarget(0.0f);
+                set_task(0x0008); /* GoPoint */
+                s_move_start_ms = HAL_GetTick();
+                RobotState.fsm = STATE_RUNNING;
+                s_run_mode  = RUN_POINT;
+            }
             s_hb_last_tick = HAL_GetTick(); /* HOME write proves PC alive — reset HB timer */
         } else if ((mode_reg & 0x02u) || (ModbusBridge_GetReg(0x05) != 0u)) { /* Jog step */
             int16_t step_raw = (int16_t)ModbusBridge_GetReg(0x05);
@@ -882,8 +898,10 @@ static void fsm_run(void)
                Arm must be stopped (STATE_IDLE). After this, pos reads 0°
                and all subsequent moves reference this as home.              */
             MotorCtrl_Zero(0.0f);
+            MotorCtrl_SyncTrajectory();
             MotorCtrl_SetTarget(0.0f);
             s_user_home_rad = 0.0f;
+            RobotState.status.is_homed = true;
         } else if (mode_reg & 0x10u) {                  /* Test  */
             ModbusBridge_SetReg(0x01, 0);
             s_test_type           = ModbusBridge_GetReg(0x06);
@@ -1174,6 +1192,9 @@ void App_Init(void)
     RobotState.dbg.last_fault                = 0u;
     /* E-stop bypass — set to true in Live Expressions to disable ALL E-stop checks */
     RobotState.dbg.estop_disabled            = false;
+    
+    RobotState.dbg.gripper_use_delay         = false;
+    RobotState.dbg.gripper_delay_ms          = 500u;
 
     /* Seed heartbeat tracker — gives 2 s window before timeout is enforced */
     s_hb_last_tick = HAL_GetTick();
