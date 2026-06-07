@@ -1,11 +1,11 @@
 {
   "encoder": 0,
   "kalman": 84,
-  "trajectory": 4,
+  "trajectory": 0,
   "feedforward": 0,
   "dist_comp": 0,
-  "pos_pid": 2,
+  "pos_pid": 3,
   "vel_pid": 94,
   "motor": 3,
-  "total": 7
+  "total": 4
 }
