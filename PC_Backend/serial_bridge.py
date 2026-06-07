@@ -31,6 +31,9 @@ import threading
 import queue
 import asyncio
 import json
+import os
+import csv
+import datetime
 
 try:
     import websockets
@@ -282,6 +285,26 @@ def _robot_reader(ser: serial.Serial) -> None:
         _p2p_data = []
         _p2p_logging = False
 
+    def _handle_wcet(parts):
+        try:
+            if len(parts) >= 10:
+                wcet_us = {
+                    "encoder": int(parts[1]),
+                    "kalman": int(parts[2]),
+                    "trajectory": int(parts[3]),
+                    "feedforward": int(parts[4]),
+                    "dist_comp": int(parts[5]),
+                    "pos_pid": int(parts[6]),
+                    "vel_pid": int(parts[7]),
+                    "motor": int(parts[8]),
+                    "total": int(parts[9])
+                }
+                os.makedirs("exports", exist_ok=True)
+                with open("exports/wcet.json", "w") as f:
+                    json.dump(wcet_us, f, indent=2)
+        except Exception as e:
+            print(f"[!] Error saving WCET: {e}")
+
     try:
         while not _stop.is_set():
             b1 = ser.read(1)
@@ -293,8 +316,14 @@ def _robot_reader(ser: serial.Serial) -> None:
             # ── telemetry line ────────────────────────────────────────────────
             if b == 0x24:   # '$'
                 rest = ser.readline()
-                line = '$' + rest.decode('ascii', errors='ignore').strip()
-                _ws_q.put(line)
+                line_str = ('$' + rest.decode('ascii', errors='replace')).strip()
+                if line_str.startswith('$WCET'):
+                    _handle_wcet(line_str.split(','))
+                
+                if _ws_q.qsize() < 100:
+                    _ws_q.put(line_str)
+                continue
+                
                 if DEBUG:
                     now = time.monotonic()
                     _FSM = {0:'INIT', 1:'HOMING', 2:'IDLE', 3:'RUNNING', 4:'FAULT'}
@@ -527,6 +556,7 @@ def _robot_writer(ser: serial.Serial) -> None:
         try:
             frame = _to_robot.get(timeout=0.1)
             ser.write(frame)
+            time.sleep(0.01) # 10ms gap so STM32 UART IDLE interrupt fires properly
         except queue.Empty:
             pass
 

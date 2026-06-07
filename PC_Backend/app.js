@@ -151,18 +151,41 @@ function processPacket(packet) {
             state.firmwareTarget = (parseFloat(parts[2]) || 0) / 10.0;
             // shp is parts[4], p_act is parts[5], v_cmd is parts[7]
             state.velSetpoint = (parseFloat(parts[7]) || 0) / 10.0;
+            state.kfTheta = (parseFloat(parts[5]) || 0) / 100.0;  // kal_pos_x100
+            state.kfOmega = (parseFloat(parts[8]) || 0) / 10.0;   // kal_vel_x10
+            state.posIntegral = (parseFloat(parts[11]) || 0) / 10.0;
+            state.spdIntegral = (parseFloat(parts[12]) || 0) / 10.0;
         }
     } else if (parts[0] === 'KF') {
-        if (parts.length >= 9) {
-            state.kfTheta = parseFloat(parts[1]) || 0;
-            state.kfOmega = parseFloat(parts[2]) || 0;
-            state.kfTau = parseFloat(parts[3]) || 0;
-            state.kfIa = parseFloat(parts[4]) || 0;
-            state.kfInnov = parseFloat(parts[5]) || 0;
+        if (parts.length >= 6) {
+            state.kfTheta = (parseFloat(parts[1]) || 0) / 100.0;
+            state.kfOmega = (parseFloat(parts[2]) || 0) / 10.0;
+            state.kfTau = (parseFloat(parts[3]) || 0) / 1000.0;
+            state.kfIa = (parseFloat(parts[4]) || 0) / 1000.0;
+            state.kfInnov = (parseFloat(parts[5]) || 0) / 1000.0;
+            if (parts.length >= 8) {
+                state.kfSanityTheta = parseFloat(parts[6]) || 0;
+                state.kfSanityOmega = parseFloat(parts[7]) || 0;
+            }
             state.kfP00 = parseFloat(parts[6]) || 0;
             state.kfP11 = parseFloat(parts[7]) || 0;
             state.kfP22 = parseFloat(parts[8]) || 0;
             state.kfEnabled = true;
+        }
+    } else if (parts[0] === 'WCET') {
+        // $WCET,enc,kf,traj,ff,dist,pospid,velpid,motor,total
+        if (parts.length >= 10) {
+            state.wcet = {
+                encoder: parseInt(parts[1]) || 0,
+                kalman: parseInt(parts[2]) || 0,
+                trajectory: parseInt(parts[3]) || 0,
+                feedforward: parseInt(parts[4]) || 0,
+                dist_comp: parseInt(parts[5]) || 0,
+                pos_pid: parseInt(parts[6]) || 0,
+                vel_pid: parseInt(parts[7]) || 0,
+                motor: parseInt(parts[8]) || 0,
+                total: parseInt(parts[9]) || 0,
+            };
         }
     } else if (parts[0] === 'GAINS') {
         // $GAINS,loop,kp*1000,ki*1000,kd*1000

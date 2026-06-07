@@ -33,6 +33,9 @@
         'kf_enabled',  // KFEN
         'estop',       // ESTOP
         'prox',        // PROX
+        'tracking_err',// pos - firmwareTarget (deg)
+        'pos_integral',// position loop integrator state
+        'spd_integral',// speed loop integrator state
     ];
 
     // ---- State ----
@@ -70,15 +73,15 @@
         'HW8':  { label: 'HW-8 Set Home',       prompts: ['Set-home angle (deg)'],  cmd: (p) => null },
         'HW9':  { label: 'HW-9 Out-of-WS',      prompts: ['Out-of-range target'],   cmd: (p) => `TEST,HW9,${p[0]}` },
         'HW10': { label: 'HW-10 Rod drop',      prompts: ['Release angle (deg)'],   cmd: (p) => null },
-        'L4-1-TRAP':   { label: 'L4-1 Trap',     prompts: ['Target (deg)'], cmd: (p) => `TEST,L41,TRAP,${p[0]}` },
-        'L4-1-SCURVE': { label: 'L4-1 S-Curve',  prompts: ['Target (deg)'], cmd: (p) => `TEST,L41,SCURVE,${p[0]}` },
-        'L4-2-FF':     { label: 'L4-2 +FF',      prompts: ['Target (deg)'], cmd: (p) => `TEST,L42,FF,${p[0]}` },
-        'L4-2-NOFF':   { label: 'L4-2 −FF',      prompts: ['Target (deg)'], cmd: (p) => `TEST,L42,NOFF,${p[0]}` },
-        'L4-3':        { label: 'L4-3 PID step', prompts: ['Target (deg)'], cmd: (p) => `TEST,L43,${p[0]}` },
-        'L4-4':        { label: 'L4-4 Anti-windup', prompts: ['Target (deg)', 'AWU (1/0)'], cmd: (p) => `TEST,L44,${p[0]},${p[1]||1}` },
-        'L4-5':        { label: 'L4-5 Kalman Q/R',  prompts: ['Target (deg)'], cmd: (p) => `TEST,L45,${p[0]}` },
-        'L4-6':        { label: 'L4-6 Kalman ia',   prompts: ['Target (deg)'], cmd: (p) => `TEST,L46,${p[0]}` },
-        'L4-7':        { label: 'L4-7 SysID',       prompts: [],               cmd: ()  => `TEST,L47` },
+        'L4-1-TRAP':   { label: 'L4-1 Trap',     prompts: ['Target (deg)'], cmd: (p) => ['SET:J_MAX_RAD=99999', `SET:TARGET=${p[0]}`] },
+        'L4-1-SCURVE': { label: 'L4-1 S-Curve',  prompts: ['Target (deg)'], cmd: (p) => [`SET:J_MAX_RAD=${document.getElementById('input-jmax-rad').value || 314}`, `SET:TARGET=${p[0]}`] },
+        'L4-2-FF':     { label: 'L4-2 +FF',      prompts: ['Target (deg)'], cmd: (p) => [`SET:K_VFF=${document.getElementById('input-speed-vff').value || 0}`, `SET:TARGET=${p[0]}`] },
+        'L4-2-NOFF':   { label: 'L4-2 −FF',      prompts: ['Target (deg)'], cmd: (p) => ['SET:K_VFF=0', 'SET:K_AFF=0', `SET:TARGET=${p[0]}`] },
+        'L4-3':        { label: 'L4-3 PID step', prompts: ['Target (deg)'], cmd: (p) => `SET:TARGET=${p[0]}` },
+        'L4-4':        { label: 'L4-4 Anti-windup', prompts: ['Target (deg)'], cmd: (p) => `SET:TARGET=${p[0]}` },
+        'L4-5':        { label: 'L4-5 Kalman Q/R',  prompts: ['Target (deg)'], cmd: (p) => `SET:TARGET=${p[0]}` },
+        'L4-6':        { label: 'L4-6 Kalman ia',   prompts: ['Target (deg)'], cmd: (p) => `SET:TARGET=${p[0]}` },
+        'L4-7':        { label: 'L4-7 SysID',       prompts: [],               cmd: ()  => null },
     };
 
     // ---- DOM helpers ----
@@ -128,6 +131,7 @@
 
     // ---- Recording ----
     function startRecording(testId, params, sendCmd) {
+        console.log(`[TEST DEBUG] startRecording called. testId=${testId}, params=${params}`);
         if (T.recording) {
             dlog('Already recording — stop first.');
             return;
@@ -168,9 +172,26 @@
             if (b.dataset.test === testId) b.classList.add('running');
         });
 
+        console.log(`[TEST DEBUG] Command to send:`, sendCmd);
         if (sendCmd && typeof sendCommand === 'function') {
-            sendCommand(sendCmd);
-            dlog('Sent: $' + sendCmd + '*');
+            console.log(`[TEST DEBUG] sendCommand is available, dispatching...`);
+            if (Array.isArray(sendCmd)) {
+                let delayMs = 0;
+                sendCmd.forEach(c => {
+                    setTimeout(() => {
+                        console.log(`[TEST DEBUG] Dispatching array element: ${c}`);
+                        sendCommand(c);
+                        dlog('Sent: $' + c + '*');
+                    }, delayMs);
+                    delayMs += 100; // 100ms delay between commands
+                });
+            } else {
+                console.log(`[TEST DEBUG] Dispatching single string: ${sendCmd}`);
+                sendCommand(sendCmd);
+                dlog('Sent: $' + sendCmd + '*');
+            }
+        } else {
+            console.log(`[TEST DEBUG] No command to send, or sendCommand is missing (typeof sendCommand: ${typeof sendCommand})`);
         }
 
         if (T.timerId) clearInterval(T.timerId);
@@ -181,6 +202,69 @@
         const elapsed = (performance.now() - T.startTs) / 1000;
         $('test-rec-elapsed').textContent = elapsed.toFixed(1) + 's';
         $('test-rec-samples').textContent = T.rows.length + ' samples';
+    }
+
+    let autoRunQueue = [];
+
+    function startAutoRun() {
+        if (!confirm("This will automatically move the robot to 0, and then record a 0->180 move for all L4 experiments. Ensure the workspace is clear! Proceed?")) return;
+        
+        autoRunQueue = [
+            // L4-1 Motion Profiles
+            { id: 'L4-1-TRAP',   params: ['180'], customCmd: ['SET:KF_EN=0', 'SET:J_MAX_RAD=99999', 'SET:TARGET=180'] },
+            { id: 'L4-1-SCURVE', params: ['180'], customCmd: ['SET:KF_EN=0', 'SET:J_MAX_RAD=314', 'SET:TARGET=180'] },
+            
+            // L4-2 Feedforward
+            { id: 'L4-2-NOFF',   params: ['180'], customCmd: ['SET:KF_EN=0', 'SET:K_VFF=0', 'SET:K_AFF=0', 'SET:TARGET=180'] },
+            { id: 'L4-2-FF',     params: ['180'], customCmd: ['SET:KF_EN=0', 'SET:K_VFF=3.03', 'SET:K_AFF=0.01', 'SET:TARGET=180'] },
+            
+            // L4-3 PID Step Response Sweep
+            { id: 'L4-3',        params: ['KpLow_180'],  customCmd: ['SET:KF_EN=0', 'SET:POS_KP=2', 'SET:TARGET=180'] },
+            { id: 'L4-3',        params: ['KpHigh_180'], customCmd: ['SET:KF_EN=0', 'SET:POS_KP=8', 'SET:TARGET=180'] },
+            { id: 'L4-3',        params: ['KpKd_180'],   customCmd: ['SET:KF_EN=0', 'SET:POS_KP=8', 'SET:POS_KD=0.05', 'SET:TARGET=180'] },
+            
+            // L4-4 Anti-windup Demo
+            { id: 'L4-4',        params: ['180'], customCmd: ['SET:KF_EN=0', 'SET:POS_KD=0', 'SET:TARGET=180'] },
+            
+            // L4-5 Kalman Q/R Sweep
+            { id: 'L4-5',        params: ['HighQ_180'],  customCmd: ['SET:KF_EN=1', 'SET:KF_Q_OMEGA=1e0', 'SET:TARGET=180'] },
+            { id: 'L4-5',        params: ['BalQ_180'],   customCmd: ['SET:KF_EN=1', 'SET:KF_Q_OMEGA=1e-3', 'SET:TARGET=180'] },
+            { id: 'L4-5',        params: ['LowQ_180'],   customCmd: ['SET:KF_EN=1', 'SET:KF_Q_OMEGA=1e-6', 'SET:TARGET=180'] },
+            
+            // L4-6 Kalman State Estimates
+            { id: 'L4-6',        params: ['180'], customCmd: ['SET:KF_EN=1', 'SET:KF_Q_OMEGA=1e-3', 'SET:KF_Q_TAU=1e0', 'SET:KF_Q_I=1e0', 'SET:TARGET=180'] }
+        ];
+        
+        // Ensure auto-stop is checked
+        if ($('cap-opt-time')) {
+            $('cap-opt-time').checked = true;
+            if (parseFloat($('cap-opt-time-val').value) < 3.0) {
+                $('cap-opt-time-val').value = "3.5"; 
+            }
+        }
+        
+        runNextAuto();
+    }
+
+    function runNextAuto() {
+        if (autoRunQueue.length === 0) {
+            dlog("Auto-Run Complete!");
+            return;
+        }
+        const next = autoRunQueue.shift();
+        const def = TESTS[next.id];
+        if (def) {
+            dlog(`Auto-Run: Moving back to 0° for ${next.id}...`);
+            // Reset to 0 before the experiment without recording
+            if (typeof sendCommand === 'function') sendCommand('SET:TARGET=0');
+            
+            // Wait 5 seconds for the robot to settle at 0
+            setTimeout(() => {
+                dlog(`Auto-Run: Starting ${next.id} (${next.params})!`);
+                const cmd = next.customCmd ? next.customCmd : def.cmd(next.params);
+                startRecording(next.id, next.params, cmd);
+            }, 5000);
+        }
     }
 
     async function stopRecording() {
@@ -196,6 +280,7 @@
 
         if (T.rows.length === 0) {
             dlog('No samples captured — nothing saved.');
+            if (autoRunQueue.length > 0) runNextAuto();
             return;
         }
 
@@ -204,6 +289,8 @@
         await saveCsv(fname, csv);
         addRecentFile(fname, T.rows.length, T.startedAt);
         dlog('Saved ' + fname + ' (' + T.rows.length + ' samples)');
+        
+        if (autoRunQueue.length > 0) runNextAuto();
     }
 
     // ---- Snapshot per telemetry packet (called from app.js) ----
@@ -247,6 +334,9 @@
             kf_enabled: stateObj.kfEnabled ? 1 : 0,
             estop: stateObj.estop ? 1 : 0,
             prox: stateObj.prox ? 1 : 0,
+            tracking_err: (stateObj.currentPos || 0) - (stateObj.firmwareTarget || 0),
+            pos_integral: stateObj.posIntegral || 0,
+            spd_integral: stateObj.spdIntegral || 0,
         });
     }
 
@@ -272,7 +362,12 @@
              + '_' + pad(d.getHours(),2) + pad(d.getMinutes(),2) + pad(d.getSeconds(),2);
     }
     function buildFilename(testId, params, date, trial) {
+        // L4 tests: use simplified name for pipeline compatibility
+        // e.g. L4-1-TRAP_180_20260607_093502.csv
         const safe = (testId + (params ? '_' + params : '')).replace(/[^A-Za-z0-9_-]/g, '_');
+        if (testId.startsWith('L4')) {
+            return safe + '_' + timestampStr(date) + '.csv';
+        }
         return safe + '_trial' + pad(trial, 3) + '_' + timestampStr(date) + '.csv';
     }
 
@@ -367,6 +462,7 @@
     function init() {
         $('btn-test-folder').addEventListener('click', pickFolder);
         $('btn-test-stop').addEventListener('click', stopRecording);
+        if ($('btn-run-all-l4')) $('btn-run-all-l4').addEventListener('click', startAutoRun);
 
         document.querySelectorAll('.test-btn').forEach(btn => {
             btn.addEventListener('click', () => {

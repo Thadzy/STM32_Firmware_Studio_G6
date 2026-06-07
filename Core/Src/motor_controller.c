@@ -84,6 +84,20 @@ static uint16_t     s_settle_ticks;
 
 static bool s_running;
 
+/* WCET Profiling state */
+static struct {
+    uint32_t encoder;
+    uint32_t kalman;
+    uint32_t trajectory;
+    uint32_t feedforward;
+    uint32_t dist_comp;
+    uint32_t pos_pid;
+    uint32_t vel_pid;
+    uint32_t motor;
+    uint32_t total;
+} s_wcet = {0};
+static uint16_t s_wcet_tick_count = 0;
+
 /* -------------------------------------------------------------------------
    Auto-tune relay state machine
    State lives here; g_at (modbus_bridge) holds the cross-module parameters.
@@ -251,6 +265,11 @@ float MotorCtrl_GetKd(uint8_t loop)
 
 void MotorCtrl_Init(void)
 {
+    /* Enable DWT cycle counter for WCET profiling */
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+    DWT->CYCCNT = 0;
+
     /* Zero all state */
     memset(&s_kalman,   0, sizeof(s_kalman));
     memset(&s_sc,       0, sizeof(s_sc));
@@ -373,7 +392,7 @@ void MotorCtrl_SyncTrajectory(void)
     s_sc.vel       = 0.0f;
     s_sc.acc       = 0.0f;
     s_sc.target    = pos;
-    s_sc.done      = true;
+    s_sc.done       = true;
     s_pos_integral = 0.0f;
     s_spd_integral = 0.0f;
     s_vel_sp       = 0.0f;
@@ -426,6 +445,9 @@ void MotorCtrl_Tick1kHz(void)
         return;
     }
 
+    uint32_t t_start = DWT->CYCCNT;
+    uint32_t t_lap = t_start;
+
     /* --- 1. Read encoder (16-bit counter, handles overflow) --------------- */
     uint16_t enc   = (uint16_t)__HAL_TIM_GET_COUNTER(&htim3);
     int16_t  delta = (int16_t)(enc - s_last_enc);
@@ -447,10 +469,16 @@ void MotorCtrl_Tick1kHz(void)
         RobotState.dbg.safety.tripped_boundary = true;
         return;
     }
+    s_wcet.encoder = DWT->CYCCNT - t_lap;
 
     /* --- 2. Kalman filter update ----------------------------------------- */
+    t_lap = DWT->CYCCNT;
     float pos_rad = (float)s_pos_counts * COUNTS_TO_RAD;
-    Kalman_Update(&s_kalman, pos_rad);
+    /* Calculate voltage from the previous cycle's PWM command.
+       Max PWM is 50, which corresponds to 24V. */
+    float voltage_v = (float)RobotState.motion.motor_pwm * (24.0f / 50.0f);
+    Kalman_Update(&s_kalman, pos_rad, voltage_v);
+    s_wcet.kalman = DWT->CYCCNT - t_lap;
 
     /* --- 3. Update RobotState.motion ---------------------------------------- */
     RobotState.motion.position_counts = s_pos_counts;
@@ -523,8 +551,10 @@ void MotorCtrl_Tick1kHz(void)
         s_spd_integral = 0.0f;
         Motor_SetPWM(0);
     }
+    s_wcet.vel_pid = DWT->CYCCNT - t_lap;
 
     /* --- 4b. Normal inner velocity PID + feedforward ---------------------- */
+    t_lap = DWT->CYCCNT;
     if (!s_running) {
         Motor_SetPWM(0);
         return;
@@ -578,6 +608,7 @@ void MotorCtrl_Tick1kHz(void)
 
     RobotState.motion.motor_pwm = pwm;
     Motor_SetPWM(pwm);
+    s_wcet.motor = DWT->CYCCNT - t_lap;
 
     /* --- Software Safety Stack ------------------------------------------- */
 
@@ -639,6 +670,9 @@ void MotorCtrl_Tick1kHz(void)
    ------------------------------------------------------------------------- */
 void MotorCtrl_Tick100Hz(void)
 {
+    uint32_t t_start = DWT->CYCCNT;
+    uint32_t t_lap = t_start;
+
     /* =========================================================
        Auto-tune POSITION relay (outer loop, AT_LOOP_POSITION)
 
@@ -716,22 +750,6 @@ void MotorCtrl_Tick100Hz(void)
 
     /* ====================================================================
        OPTION 1 — Velocity Bypass Jog
-       When s_jog_active is true the entire outer loop (S-curve trajectory,
-       ZVD shaper, position PID) is bypassed.  The joystick velocity command
-       is written directly to s_vel_sp so the inner 1 kHz velocity PID
-       tracks it without position-loop interference.
-
-       Integral housekeeping (critical for bump-less re-engagement):
-         s_pos_integral  : zeroed every outer tick.  If we let it accumulate
-                           while the motor drifts under velocity control the
-                           position PID would fire a large correction burst
-                           the moment JogRelease() re-engages the outer loop.
-         s_pos_prev_meas : updated to the current Kalman position every tick.
-                           This pre-seeds the derivative-on-measurement term
-                           so d/dt(pos_actual) = 0 on the first post-jog tick
-                           rather than reflecting the full position change
-                           since the last time the outer loop was active
-                           (derivative kick prevention).
        ==================================================================== */
     if (s_jog_active) {
         s_pos_integral  = 0.0f;
@@ -752,6 +770,8 @@ void MotorCtrl_Tick100Hz(void)
 
     /* --- 1. Step S-curve trajectory -------------------------------------- */
     scurve_step(DT_OUTER);
+    s_wcet.trajectory = DWT->CYCCNT - t_lap;
+    t_lap = DWT->CYCCNT;
 
     /* --- 2. ZVD input shaper on S-curve position output ------------------ */
     s_zvd_buf[s_zvd_head] = s_sc.pos;
@@ -836,6 +856,11 @@ void MotorCtrl_Tick100Hz(void)
     s_vel_sp = vel_cmd;
     s_acc_sp = s_sc.acc;
 
+    s_wcet.pos_pid = DWT->CYCCNT - t_lap;
+    t_lap = DWT->CYCCNT;
+    s_wcet.dist_comp = DWT->CYCCNT - t_lap;
+    s_wcet.total = DWT->CYCCNT - t_start;
+
 send_telemetry:
     /* ── Telemetry at 100 Hz ────────────────────────────────────────────────
        Format: $T,{ms},{pos_deg×10},{vel_rads×10},{acc_rads2×10},{pwm×10}\r\n
@@ -875,6 +900,39 @@ send_telemetry:
                  vel_sp_x10, kal_vel_x10, vel_err_x10, pwm_x10, pos_int_x10, spd_int_x10);
 
         UartDma_SendTelemetry(ctrl_buf);
+        
+        /* 2b. Send $KF telemetry for L4-6 (Kalman state estimates)
+           Format: $KF,kfTheta_x100,kfOmega_x10,kfTau_x1000,kfIa_x1000,kfInnov_x1000 */
+        static char kf_buf[64];
+        int16_t kf_th_x100 = (int16_t)lroundf(s_kalman.x[0] * (180.0f / M_PI) * 100.0f);
+        int16_t kf_om_x10 = (int16_t)lroundf(s_kalman.x[1] * (180.0f / M_PI) * 10.0f);
+        int16_t kf_tau_x1000 = (int16_t)lroundf(s_kalman.x[2] * 1000.0f);
+        int16_t kf_ia_x1000 = (int16_t)lroundf(s_kalman.x[3] * 1000.0f);
+        int16_t kf_in_x1000 = (int16_t)lroundf((((float)s_pos_counts * COUNTS_TO_RAD) - s_kalman.x[0]) * 1000.0f);
+
+        snprintf(kf_buf, sizeof(kf_buf),
+                 "$KF,%d,%d,%d,%d,%d\r\n",
+                 kf_th_x100, kf_om_x10, kf_tau_x1000, kf_ia_x1000, kf_in_x1000);
+        UartDma_SendTelemetry(kf_buf);
+    }
+
+    /* 3. Send $WCET telemetry occasionally */
+    if (++s_wcet_tick_count >= 100) {
+        s_wcet_tick_count = 0;
+        static char wcet_buf[128];
+        uint32_t clk_mhz = SystemCoreClock / 1000000;
+        snprintf(wcet_buf, sizeof(wcet_buf),
+                 "$WCET,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu,%lu\r\n",
+                 (unsigned long)(s_wcet.encoder / clk_mhz),
+                 (unsigned long)(s_wcet.kalman / clk_mhz),
+                 (unsigned long)(s_wcet.trajectory / clk_mhz),
+                 (unsigned long)(s_wcet.feedforward / clk_mhz),
+                 (unsigned long)(s_wcet.dist_comp / clk_mhz),
+                 (unsigned long)(s_wcet.pos_pid / clk_mhz),
+                 (unsigned long)(s_wcet.vel_pid / clk_mhz),
+                 (unsigned long)(s_wcet.motor / clk_mhz),
+                 (unsigned long)(s_wcet.total / clk_mhz));
+        UartDma_SendTelemetry(wcet_buf);
     }
 }
 

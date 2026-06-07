@@ -3,14 +3,21 @@
 #include "system_state.h"
 #include <string.h>
 
-/* State-transition matrix F (constant, dt = KALMAN_DT = 0.001 s):
-   [ 1  dt  dt²/2  dt³/6 ]
-   [ 0   1     dt  dt²/2 ]
-   [ 0   0      1     dt ]
-   [ 0   0      0      1 ]                                                    */
-#define KF_DT   KALMAN_DT
-#define KF_DT2  (KF_DT * KF_DT * 0.5f)
-#define KF_DT3  (KF_DT * KF_DT * KF_DT * (1.0f / 6.0f))
+/* Exact ZOH Discrete State-Transition Matrix Phi (dt = 0.001) */
+static const float PHI[4][4] = {
+    {1.0f,          0.0009989989f, -6.8679895e-7f,  1.2007346e-6f},
+    {0.0f,          0.997317666f,  -0.0013729679f,  0.0020608558f},
+    {0.0f,          0.0f,           1.0f,           0.0f},
+    {0.0f,         -1.2692052f,     0.0010163110f,  0.36477577f}
+};
+
+/* Exact ZOH Discrete Input Matrix Gamma (dt = 0.001) */
+static const float GAMMA[4] = {
+    2.97955747e-7f,
+    8.29236580e-4f,
+    0.0f,
+    0.435397404f
+};
 
 void Kalman_Init(KalmanState_t *k, float pos0_rad)
 {
@@ -18,69 +25,79 @@ void Kalman_Init(KalmanState_t *k, float pos0_rad)
     k->x[0] = pos0_rad;
     k->P[0][0] = 0.01f;     /* pos  uncertainty: ~0.1 rad                   */
     k->P[1][1] = 10.0f;     /* vel  uncertainty: ~3.2 rad/s                 */
-    k->P[2][2] = 100.0f;    /* acc  uncertainty: ~10 rad/s²                 */
-    k->P[3][3] = 1000.0f;   /* jerk uncertainty: ~31.6 rad/s³               */
+    k->P[2][2] = 1.0f;      /* tau  uncertainty: ~1.0 Nm                    */
+    k->P[3][3] = 1.0f;      /* ia   uncertainty: ~1.0 A                     */
 }
 
-void Kalman_Update(KalmanState_t *k, float pos_meas_rad)
+void Kalman_Update(KalmanState_t *k, float pos_meas_rad, float voltage_v)
 {
     float *x  = k->x;
     float (*P)[4] = k->P;
 
     /* ----------------------------------------------------------------
-       PREDICT: x = F * x
+       PREDICT: x = Phi * x + Gamma * u
        ---------------------------------------------------------------- */
-    float x0 = x[0] + KF_DT*x[1] + KF_DT2*x[2] + KF_DT3*x[3];
-    float x1 = x[1] + KF_DT*x[2] + KF_DT2*x[3];
-    float x2 = x[2] + KF_DT*x[3];
-    float x3 = x[3];
-    x[0] = x0; x[1] = x1; x[2] = x2; x[3] = x3;
+    float x_pred[4];
+    for (int i = 0; i < 4; i++) {
+        x_pred[i] = GAMMA[i] * voltage_v;
+        for (int j = 0; j < 4; j++) {
+            x_pred[i] += PHI[i][j] * x[j];
+        }
+    }
 
     /* ----------------------------------------------------------------
-       PREDICT: P = F * P * F' + Q
-       Step 1: FP = F * P (exploit F upper-triangular structure)
+       PREDICT: P = Phi * P * Phi' + Q
+       Step 1: PhiP = Phi * P
        ---------------------------------------------------------------- */
-    float FP[4][4];
-    for (int j = 0; j < 4; j++) {
-        FP[0][j] = P[0][j] + KF_DT*P[1][j] + KF_DT2*P[2][j] + KF_DT3*P[3][j];
-        FP[1][j] = P[1][j] + KF_DT*P[2][j] + KF_DT2*P[3][j];
-        FP[2][j] = P[2][j] + KF_DT*P[3][j];
-        FP[3][j] = P[3][j];
-    }
-    /* Step 2: P = FP * F^T (F^T is lower-triangular) */
+    float PhiP[4][4];
     for (int i = 0; i < 4; i++) {
-        P[i][0] = FP[i][0] + FP[i][1]*KF_DT + FP[i][2]*KF_DT2 + FP[i][3]*KF_DT3;
-        P[i][1] = FP[i][1] + FP[i][2]*KF_DT + FP[i][3]*KF_DT2;
-        P[i][2] = FP[i][2] + FP[i][3]*KF_DT;
-        P[i][3] = FP[i][3];
+        for (int j = 0; j < 4; j++) {
+            PhiP[i][j] = 0.0f;
+            for (int l = 0; l < 4; l++) {
+                PhiP[i][j] += PHI[i][l] * P[l][j];
+            }
+        }
     }
-    /* Add process noise Q (diagonal) */
-    P[0][0] += TuningParams.kalman.q_pos;
-    P[1][1] += TuningParams.kalman.q_vel;
-    P[2][2] += TuningParams.kalman.q_acc;
-    P[3][3] += TuningParams.kalman.q_jerk;
+
+    /* Step 2: P_pred = PhiP * Phi' */
+    float P_pred[4][4];
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            P_pred[i][j] = 0.0f;
+            for (int l = 0; l < 4; l++) {
+                P_pred[i][j] += PhiP[i][l] * PHI[j][l]; /* Phi[j][l] is Phi^T[l][j] */
+            }
+        }
+    }
+
+    /* Add process noise Q (diagonal). We map the existing kinematic tuning
+       parameters to our new states to maintain dashboard compatibility. */
+    P_pred[0][0] += TuningParams.kalman.q_pos;   /* Position Q */
+    P_pred[1][1] += TuningParams.kalman.q_vel;   /* Velocity Q */
+    P_pred[2][2] += TuningParams.kalman.q_acc;   /* Disturbance Torque Q */
+    P_pred[3][3] += TuningParams.kalman.q_jerk;  /* Armature Current Q */
 
     /* ----------------------------------------------------------------
        UPDATE: scalar measurement z = pos_meas_rad, H = [1 0 0 0]
+       y = z - H * x_pred = pos_meas_rad - x_pred[0]
        ---------------------------------------------------------------- */
-    float y    = pos_meas_rad - x[0];           /* innovation               */
-    float S    = P[0][0] + TuningParams.kalman.r_pos;        /* innovation covariance    */
+    float y    = pos_meas_rad - x_pred[0];           /* innovation               */
+    float S    = P_pred[0][0] + TuningParams.kalman.r_pos; /* innovation covariance  */
     float Sinv = 1.0f / S;
 
-    /* Kalman gain K = P * H' / S  (H=[1,0,0,0] → K = first col of P / S)  */
+    /* Kalman gain K = P_pred * H' / S  (H=[1,0,0,0] -> K = first col of P_pred / S) */
     float K[4];
-    for (int i = 0; i < 4; i++) K[i] = P[i][0] * Sinv;
+    for (int i = 0; i < 4; i++) K[i] = P_pred[i][0] * Sinv;
 
-    /* State update: x += K * y */
-    for (int i = 0; i < 4; i++) x[i] += K[i] * y;
+    /* State update: x = x_pred + K * y */
+    for (int i = 0; i < 4; i++) x[i] = x_pred[i] + K[i] * y;
 
-    /* Covariance update: P = (I - K*H)*P
-       Save the original first row before in-place update.                   */
-    float P0[4];
-    for (int j = 0; j < 4; j++) P0[j] = P[0][j];
+    /* Covariance update: P = (I - K*H) * P_pred
+       Since H = [1,0,0,0], the matrix (I - K*H) just subtracts K[i] from the first column of I.
+       So P[i][j] = P_pred[i][j] - K[i]*P_pred[0][j] */
     for (int i = 0; i < 4; i++) {
         for (int j = 0; j < 4; j++) {
-            P[i][j] -= K[i] * P0[j];
+            P[i][j] = P_pred[i][j] - K[i] * P_pred[0][j];
         }
     }
 }
