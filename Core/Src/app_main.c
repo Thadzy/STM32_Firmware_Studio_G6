@@ -1385,13 +1385,27 @@ void App_Run(void)
     /* Run main FSM */
     fsm_run();
 
-    /* Pilot Lamp logic: Red (Relay OFF, GPIO_PIN_SET) when officially in FAULT state.
-       Green (Relay ON, GPIO_PIN_RESET) when healthy. 
-       Do not trigger off raw estop sensor to prevent relay chatter during mechanical vibration. */
-    if (RobotState.fsm == STATE_FAULT) {
-        HAL_GPIO_WritePin(Relay_SysStatus_GPIO_Port, Relay_SysStatus_Pin, GPIO_PIN_SET);
-    } else {
-        HAL_GPIO_WritePin(Relay_SysStatus_GPIO_Port, Relay_SysStatus_Pin, GPIO_PIN_RESET);
+    /* Pilot Lamp logic (Software Workaround for Hardware Voltage Sag):
+       Mechanical relays chatter if you try to hold them ON while the motor draws heavy current.
+       Workaround: Intentionally turn the relay OFF (Red) whenever the motor is moving,
+       and only turn it ON (Green) when completely stopped and idle. */
+    bool is_moving = (RobotState.fsm == STATE_RUNNING || 
+                      RobotState.fsm == STATE_HOMING || 
+                      s_jog_vel_active || 
+                      s_jog_step_active);
+
+    bool should_be_red = (RobotState.fsm == STATE_FAULT || is_moving);
+
+    static int8_t s_last_relay_state = -1;
+    int8_t current_relay_state = should_be_red ? 1 : 0;
+
+    if (current_relay_state != s_last_relay_state) {
+        if (should_be_red) {
+            HAL_GPIO_WritePin(Relay_SysStatus_GPIO_Port, Relay_SysStatus_Pin, GPIO_PIN_SET);   /* Relay OFF -> Red */
+        } else {
+            HAL_GPIO_WritePin(Relay_SysStatus_GPIO_Port, Relay_SysStatus_Pin, GPIO_PIN_RESET); /* Relay ON -> Green */
+        }
+        s_last_relay_state = current_relay_state;
     }
     
     /* Update Live Expressions debug variable for PC9 */

@@ -78,7 +78,7 @@
    FF_ACCEL    : acceleration FF to inner loop.     Units: PWM / (rad/s²)     */
 #define FF_VELOCITY             3.03f
 #define FF_ACCEL                0.1f
-#define FF_DISTURBANCE          4.0f
+#define FF_DISTURBANCE          3.25f
 
 /* --- S-Curve Trajectory Limits ---------------------------------------------*/
 #define SCURVE_VMAX_RADS        7.304f      /* rad/s   — maximum velocity     */

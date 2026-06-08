@@ -820,7 +820,11 @@ send_telemetry:
             RobotState.comms.telemetry_drops++;
         }
 
-        /* 2. Send detailed $CTRL debug telemetry for the tuning dashboard */
+        /* 2. Send detailed $CTRL debug telemetry for the tuning dashboard 
+           DISABLED FOR PRODUCTION: These high-volume logs flood the UART at 100 Hz,
+           causing the TX ring buffer to hit its watermark and drop the $T packets
+           that the main dashboard relies on. Enable only for PID tuning! */
+#if 0
         static char ctrl_buf[140];
         int16_t sc_tgt_x10  = (int16_t)lroundf(s_sc.target * (180.0f / M_PI) * 10.0f);
         int16_t sc_pos_x10  = (int16_t)lroundf(s_sc.pos * (180.0f / M_PI) * 10.0f);
@@ -855,6 +859,7 @@ send_telemetry:
                  "$KF,%d,%d,%d,%d,%d\r\n",
                  kf_th_x100, kf_om_x10, kf_tau_x1000, kf_ia_x1000, kf_in_x1000);
         UartDma_SendTelemetry(kf_buf);
+#endif
     }
 
     /* 3. Send $WCET telemetry occasionally */
