@@ -84,15 +84,23 @@ Output binary: `Debug/Pick_and_Place_Robot.elf`
 
 > **No Makefile / cmake path exists.** Running `make` from a terminal will fail — the IDE manages its own internal build system.
 
-### PC Backend setup
+### PC Backend setup & Running the System
 
-```bash
+First time setup:
+```cmd
 cd PC_Backend
 python -m venv .venv
-.venv\Scripts\activate        # Windows
+.venv\Scripts\activate
 pip install -r requirements.txt
-python serial_bridge.py       # starts the bridge on COM10
 ```
+
+**To run the system (Dashboard + Serial Bridge):**
+Open a Command Prompt, navigate to the project root, and execute the batch script:
+```cmd
+cd c:\Users\Lenovo\Documents\Thadzy\Pick_and_Place_Robot
+run_system.bat
+```
+This script will automatically start the Base System UI and the Serial Bridge together in a split-pane view.
 
 ---
 
