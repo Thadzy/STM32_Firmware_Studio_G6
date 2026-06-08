@@ -319,13 +319,13 @@ def _robot_reader(ser: serial.Serial) -> None:
                 line_str = ('$' + rest.decode('ascii', errors='replace')).strip()
                 if line_str.startswith('$WCET'):
                     _handle_wcet(line_str.split(','))
-                
+
                 if _ws_q.qsize() < 100:
                     _ws_q.put(line_str)
-                continue
-                
+
                 if DEBUG:
                     now = time.monotonic()
+                    line = line_str  # alias for readability below
                     _FSM = {0:'INIT', 1:'HOMING', 2:'IDLE', 3:'RUNNING', 4:'FAULT'}
                     _FAULT_DESCS = {
                         0x00: 'None',
@@ -343,18 +343,14 @@ def _robot_reader(ser: serial.Serial) -> None:
                     if line.startswith('$ST,'):
                         parts = line.split(',')
                         if len(parts) >= 4:
-                            fsm = int(parts[1]) if parts[1].lstrip('-').isdigit() else 0
-                            fsm_n = _FSM.get(fsm, f'?{fsm}')
+                            fsm      = int(parts[1]) if parts[1].lstrip('-').isdigit() else 0
+                            fsm_n    = _FSM.get(fsm, f'?{fsm}')
                             run_mode = int(parts[2]) if parts[2].lstrip('-').isdigit() else 0
-                            fault = int(parts[3]) if parts[3].lstrip('-').isdigit() else 0
+                            fault    = int(parts[3]) if parts[3].lstrip('-').isdigit() else 0
                             fault_desc = _FAULT_DESCS.get(fault, f'Unknown 0x{fault:02X}')
-                            
-                            _last_fsm_state = fsm
-                            _last_run_mode = run_mode
-                            _last_fault_code = fault
 
                             # State transitions for P2P logger
-                            if _last_fsm_state == 3 and _last_run_mode == 3: # RUNNING + RUN_POINT
+                            if fsm == 3 and run_mode == 3:  # RUNNING + RUN_POINT
                                 if not _p2p_logging:
                                     _p2p_logging = True
                                     _p2p_data = []
@@ -365,6 +361,9 @@ def _robot_reader(ser: serial.Serial) -> None:
                                     _finish_p2p_log()
 
                             if (fsm != _last_fsm_state) or (run_mode != _last_run_mode) or (fault != _last_fault_code):
+                                _last_fsm_state  = fsm
+                                _last_run_mode   = run_mode
+                                _last_fault_code = fault
                                 alert = '  *** ROBOT IN FAULT — press RESET button on hardware ***' \
                                         if fsm == 4 else ''
                                 print(f"[STATE] FSM={fsm_n:<7} | run_mode={run_mode} | fault=0x{fault:02X} ({fault_desc}){alert}")
@@ -408,7 +407,6 @@ def _robot_reader(ser: serial.Serial) -> None:
                             pwm   = int(p[10]) / 10.0
                             pos_i = int(p[11]) / 10.0
                             spd_i = int(p[12]) / 10.0
-                            
                             is_active = (abs(v_cmd) > 0.1) or (abs(v_act) > 0.1) or (abs(pwm) > 1.0) or (_last_fsm_state in (1, 3))
                             if is_active:
                                 _ctrl_was_active = True
@@ -428,10 +426,8 @@ def _robot_reader(ser: serial.Serial) -> None:
                             vel  = int(p[3]) / 10.0
                             acc  = int(p[4]) / 10.0
                             pwm  = int(p[5]) / 10.0
-                            
                             if _p2p_logging:
                                 _p2p_data.append((tick, pos, vel, acc, pwm))
-                            
                             is_active = (abs(vel) > 0.1) or (abs(pwm) > 1.0) or (_last_fsm_state in (1, 3))
                             if is_active:
                                 _tel_was_active = True
@@ -441,6 +437,8 @@ def _robot_reader(ser: serial.Serial) -> None:
                             elif _tel_was_active:
                                 _tel_was_active = False
                                 print(f"[TELE] Motor Stopped | Tick={tick:<6} | Pos={pos:>5.1f}°")
+                    elif line.startswith('$HB') or line.startswith('$T,') or line.startswith('$ST,'):
+                        pass  # high-rate packets: suppress to avoid console spam
                     elif now - _last_tel_t >= 0.5:
                         _last_tel_t = now
                         print(f"[tel] {line}")

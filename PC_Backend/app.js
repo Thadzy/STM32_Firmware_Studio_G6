@@ -434,7 +434,10 @@ function updateUI() {
 
     document.getElementById('stat-pwm').innerText = (isNaN(state.pwm) ? '0.0' : state.pwm.toFixed(1)) + "%";
     ioProx.className = "io-item " + (state.prox ? "active" : "");
-    ioEstop.className = "io-item " + (state.estop ? "active" : "");
+    // Fault lamp: only visible when E-Stop is active or a fault code exists
+    const hasFault = state.estop || (state.fault !== 'NONE' && state.fault !== '');
+    ioEstop.style.display = hasFault ? "" : "none";
+    ioEstop.className = "io-item fault-lamp " + (hasFault ? "active" : "");
 
     btnGripperUD.innerText = "Gripper: " + (state.gripper_ud ? "DOWN" : "UP");
     btnGripperUD.className = "toggle-btn " + (state.gripper_ud ? "active" : "active-green");

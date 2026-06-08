@@ -345,6 +345,12 @@ header {
 .io-item.active .led { background: var(--accent-cyan); box-shadow: 0 0 8px var(--accent-cyan); }
 .io-item label { font-size: 0.7rem; font-weight: 600; }
 
+/* Fault pilot lamp — only rendered when E-Stop or fault is active */
+.io-item.fault-lamp { padding: 4px 8px; background: rgba(255,49,49,0.08); border: 1px solid rgba(255,49,49,0.3); border-radius: 6px; }
+.io-item.fault-lamp label { color: var(--accent-red); font-size: 0.65rem; letter-spacing: 0.5px; }
+.io-item.fault-lamp.active .led { background: var(--accent-red); box-shadow: 0 0 10px var(--accent-red); animation: fault-pulse 0.8s ease-in-out infinite; }
+@keyframes fault-pulse { 0%, 100% { box-shadow: 0 0 4px var(--accent-red); } 50% { box-shadow: 0 0 16px rgba(255,49,49,0.9); } }
+
 /* Path Sequencer */
 .path-editor {
     display: flex;
