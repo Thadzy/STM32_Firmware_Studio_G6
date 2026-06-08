@@ -98,7 +98,7 @@ All values hardware-measured / system-identified. **Never change without asking 
 | Position PID Kp / Ki / Kd | 3.0 / 0.02 / 0.15 | (rad/s)/rad |
 | Velocity feedforward | 3.03 | PWM/(rad/s) |
 | Acceleration feedforward | 0.1 | PWM/(rad/s²) |
-| Disturbance feedforward | 0.0 | — |
+| Disturbance feedforward | 3.5 | — |
 | Vmax | 7.304 | rad/s |
 | Amax | 27.49 | rad/s² |
 | Jmax | 1400 | rad/s³ |
