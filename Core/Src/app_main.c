@@ -125,6 +125,9 @@ static uint8_t  s_seq_pairs;            /* number of pick+place pairs (max 8)   
 static int16_t  s_seq_slots[16];
 static uint32_t s_auto_step_start_ms;  /* HAL_GetTick() when last motor step was commanded */
 static uint32_t s_auto_dwell_start;    /* HAL_GetTick() when post-arrive dwell began (0=not started) */
+static bool     s_clsenuf_logged;      /* true after CLSENUF telemetry sent for this step — prevents
+                                          re-sending every App_Run while gripper is running and flooding
+                                          the TX buffer (which drops Modbus replies -> abnormal heartbeat) */
 
 /* Test Mode state */
 static uint16_t s_test_type;
@@ -543,13 +546,17 @@ static void auto_run(void)
                 float pos_err_rad = fabsf(MotorCtrl_GetPosition_rad() - MotorCtrl_GetTarget_rad());
                 float close_enough_rad = deg_to_rad(close_tol);
                 if (pos_err_rad < close_enough_rad) {
-                    /* Close enough — log and proceed as if settled.
-                       Use integer×100 encoding: newlib-nano has %f disabled.
-                       Python / serial_bridge decode as value/100 degrees.    */
-                    int32_t err_x100 = (int32_t)(pos_err_rad * (180.0f / (float)M_PI) * 100.0f);
-                    snprintf(s_dbg, sizeof(s_dbg), "$AUTO,CLSENUF,%u,%ld\r\n",
-                             s_seq_step, (long)err_x100);
-                    UartDma_SendTelemetry(s_dbg);
+                    /* Send CLSENUF telemetry ONCE per step (not every App_Run).
+                       Without this guard, the message fires every loop while the
+                       gripper is running → TX buffer floods → Modbus responses
+                       are dropped → Base System sees abnormal heartbeat.        */
+                    if (!s_clsenuf_logged) {
+                        int32_t err_x100 = (int32_t)(pos_err_rad * (180.0f / (float)M_PI) * 100.0f);
+                        snprintf(s_dbg, sizeof(s_dbg), "$AUTO,CLSENUF,%u,%ld\r\n",
+                                 s_seq_step, (long)err_x100);
+                        UartDma_SendTelemetry(s_dbg);
+                        s_clsenuf_logged = true;
+                    }
                     at_target = true;  /* override: treat as arrived */
                 }
             }
@@ -641,6 +648,7 @@ static void auto_run(void)
     MotorCtrl_SetTarget(target);
     s_auto_step_start_ms = HAL_GetTick(); /* start per-step settle timer */
     s_auto_dwell_start   = 0u;            /* clear dwell for fresh arrival */
+    s_clsenuf_logged     = false;         /* allow one CLSENUF warning per step */
     s_seq_step++;
 }
 
