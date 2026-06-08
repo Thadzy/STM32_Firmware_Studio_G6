@@ -108,6 +108,17 @@ typedef struct {
         bool gripper_use_delay;    /* 1 = ignore reed switches, use fixed delay */
         uint16_t gripper_delay_ms; /* delay to use in ms (default 500) */
 
+        /* Auto-sequence settling knobs — write live from Live Expressions.
+           auto_dwell_ms        : extra wait (ms) after IsAtTarget() before gripper fires.
+                                  Default 0. Set to e.g. 1500 to let rod fully damp.
+           settle_close_enough_deg : fallback tolerance (degrees). If the arm cannot
+                                  reach the 0.1° deadband within AUTO_SETTLE_TIMEOUT_MS
+                                  but IS within this tolerance, the sequence proceeds.
+                                  Default 0.57° (≈ AUTO_CLOSE_ENOUGH_RAD). Set to 0 to
+                                  disable the fallback and always wait for full settle. */
+        uint16_t auto_dwell_ms;           /* ms rod-settle dwell before gripper (default 0) */
+        float    settle_close_enough_deg; /* fallback tolerance in degrees   (default 0.57)  */
+
         /* Software Safety Stack -------------------------------------------
            en_*     : set false to disable a guard during commissioning
            tripped_*: latches true when the guard fires; clears on fault reset */

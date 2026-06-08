@@ -110,6 +110,7 @@
 /* --- Position settling window ----------------------------------------------*/
 #define POSITION_DEADBAND_RAD   0.0017f     /* ≈ 0.1° — IsAtTarget threshold    */
 #define VELOCITY_SETTLED_RADS   0.05f       /* rad/s — near-stop threshold    */
+#define SETTLE_HOLD_TICKS       5u          /* 5 × 10ms = 50ms continuously inside deadband */
 
 /* --- Software Safety Stack -------------------------------------------------*/
 
@@ -155,7 +156,16 @@
 #define HOMING_MAX_SEARCH_DEG        40.0f  /* max deg to travel in FIND_EDGE_B before fault       */
 #define HOMING_CENTER_TIMEOUT_MS     30000u /* ms cap on GO_CENTER — proceeds to SETTLE regardless */
 #define HOMING_SETTLE_MS        1000u   /* ms to wait after reaching center before zeroing    */
-#define MOVE_TIMEOUT_MS         10000u  /* ms — jog/P2P abort to IDLE if IsAtTarget not met   */
+#define MOVE_TIMEOUT_MS         5000u   /* ms — jog/P2P abort to IDLE if IsAtTarget not met
+                                           (max move < 1s + 1.5s rod settle + 2.5s buffer)    */
+
+/* --- Auto-Sequence Settle Fallback -----------------------------------------
+   If the motor fails to fully settle within AUTO_SETTLE_TIMEOUT_MS and the
+   position error is within AUTO_CLOSE_ENOUGH_RAD the auto sequence proceeds
+   anyway instead of waiting the full MOVE_TIMEOUT_MS (5 s).
+   Configurable at runtime via RobotState.dbg.settle_close_enough_deg         */
+#define AUTO_SETTLE_TIMEOUT_MS  3000u       /* ms per step max wait in auto  */
+#define AUTO_CLOSE_ENOUGH_RAD   0.01f       /* 0.57° default close-enough tol */
 
 /* --- Gripper Sequence ------------------------------------------------------*/
 #define GRIP_TIMEOUT_MS         3000u   /* per-step timeout if reed switch missing */

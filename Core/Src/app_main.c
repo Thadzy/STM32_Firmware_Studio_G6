@@ -123,6 +123,8 @@ static float s_jog_target_rad  = 0.0f;
 /* Auto sequence state */
 static uint8_t  s_seq_pairs;            /* number of pick+place pairs (max 8)    */
 static int16_t  s_seq_slots[16];
+static uint32_t s_auto_step_start_ms;  /* HAL_GetTick() when last motor step was commanded */
+static uint32_t s_auto_dwell_start;    /* HAL_GetTick() when post-arrive dwell began (0=not started) */
 
 /* Test Mode state */
 static uint16_t s_test_type;
@@ -517,8 +519,62 @@ static void auto_run(void)
         return;
     }
 
-    /* Wait: motor must be at target AND gripper must be idle before next action */
-    if (s_seq_step > 0u && (!MotorCtrl_IsAtTarget() || s_grip != GRIP_IDLE)) return;
+    /* -----------------------------------------------------------------
+       Arrival detection with close-enough fallback.
+
+       Normally we wait for full IsAtTarget() (0.1° deadband, 50ms hold).
+       If the arm gets stuck near the target (friction at a specific angle)
+       we don't want to wait the full MOVE_TIMEOUT_MS (5s).
+
+       Fallback: if AUTO_SETTLE_TIMEOUT_MS has elapsed since this step was
+       commanded AND the arm is within settle_close_enough_deg, proceed
+       anyway.  Set dbg.settle_close_enough_deg = 0 to disable fallback.
+       ----------------------------------------------------------------- */
+    if (s_seq_step > 0u) {
+        bool at_target = MotorCtrl_IsAtTarget();
+
+        if (!at_target) {
+            /* Close-enough fallback check */
+            float close_tol = RobotState.dbg.settle_close_enough_deg;
+            bool fallback_enabled = (close_tol > 0.001f);
+            bool step_timed_out  = ((HAL_GetTick() - s_auto_step_start_ms) >= AUTO_SETTLE_TIMEOUT_MS);
+
+            if (fallback_enabled && step_timed_out) {
+                float pos_err_rad = fabsf(MotorCtrl_GetPosition_rad() - MotorCtrl_GetTarget_rad());
+                float close_enough_rad = deg_to_rad(close_tol);
+                if (pos_err_rad < close_enough_rad) {
+                    /* Close enough — log and proceed as if settled */
+                    snprintf(s_dbg, sizeof(s_dbg), "$AUTO,CLSENUF,%u,%.2f\r\n",
+                             s_seq_step,
+                             (double)(pos_err_rad * (180.0f / (float)M_PI)));
+                    UartDma_SendTelemetry(s_dbg);
+                    at_target = true;  /* override: treat as arrived */
+                }
+            }
+
+            if (!at_target) return;  /* still waiting */
+        }
+
+        /* Gripper must also be done before proceeding */
+        if (s_grip != GRIP_IDLE) return;
+
+        /* ---------------------------------------------------------------
+           Post-arrive rod-settle dwell.
+           Set dbg.auto_dwell_ms > 0 (e.g. 1500) in Live Expressions to
+           let the rod physically damp before the gripper fires.
+           --------------------------------------------------------------- */
+        uint16_t dwell_ms = RobotState.dbg.auto_dwell_ms;
+        if (dwell_ms > 0u) {
+            if (s_auto_dwell_start == 0u) {
+                s_auto_dwell_start = HAL_GetTick();  /* start the dwell */
+                return;
+            }
+            if ((HAL_GetTick() - s_auto_dwell_start) < dwell_ms) {
+                return;  /* dwell not elapsed yet */
+            }
+            /* Dwell complete — fall through to gripper / next move */
+        }
+    }
 
     if (s_seq_step == s_seq_pairs * 2u + 1u) {
         snprintf(s_dbg, sizeof(s_dbg), "$AUTO,DONE,%u\r\n", s_seq_step);
@@ -526,6 +582,7 @@ static void auto_run(void)
         RobotState.fsm         = STATE_IDLE;
         s_run_mode          = RUN_IDLE;
         s_gripper_triggered = false;
+        s_auto_dwell_start  = 0u;
         set_task(0x0000);
         ModbusBridge_SetReg(0x22, 0); /* Clear pairs so next tab switch doesn't auto-start */
         return;
@@ -542,6 +599,7 @@ static void auto_run(void)
         return; /* re-enter when gripper finishes */
     }
     s_gripper_triggered = false;
+    s_auto_dwell_start  = 0u; /* reset dwell for next step */
 
     /* Command next motor move */
     float target;
@@ -579,8 +637,11 @@ static void auto_run(void)
 
     UartDma_SendTelemetry(s_dbg);
     MotorCtrl_SetTarget(target);
+    s_auto_step_start_ms = HAL_GetTick(); /* start per-step settle timer */
+    s_auto_dwell_start   = 0u;            /* clear dwell for fresh arrival */
     s_seq_step++;
 }
+
 
 /* =========================================================================
    Joystick handler — called every App_Run from main loop
@@ -1279,6 +1340,8 @@ void App_Init(void)
     
     RobotState.dbg.gripper_use_delay         = false;
     RobotState.dbg.gripper_delay_ms          = 500u;
+    RobotState.dbg.auto_dwell_ms             = 0u;    /* rod-settle dwell: set to e.g. 1500 in Live Expr */
+    RobotState.dbg.settle_close_enough_deg   = 0.57f; /* fallback tolerance: 0 = disable fallback */
 
     /* Seed heartbeat tracker — gives 2 s window before timeout is enforced */
     s_hb_last_tick = HAL_GetTick();

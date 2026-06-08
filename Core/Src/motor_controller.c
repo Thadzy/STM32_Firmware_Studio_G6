@@ -81,6 +81,7 @@ static SCurvePlan_t s_sc;
 static float        s_zvd_buf[ZVD_BUF_SIZE];
 static uint8_t      s_zvd_head;
 static uint16_t     s_settle_ticks;
+static uint16_t     s_in_deadband_ticks; /* consecutive 100Hz ticks inside pos deadband */
 
 static bool s_running;
 
@@ -280,6 +281,7 @@ void MotorCtrl_Init(void)
     s_pos_prev_meas = 0.0f;
     s_zvd_head         = 0;
     s_settle_ticks     = 0;
+    s_in_deadband_ticks = 0;
     s_running          = false;
 
     /* Jog state — both options start disengaged */
@@ -312,20 +314,22 @@ void MotorCtrl_Init(void)
 
 void MotorCtrl_SetTarget(float target_rad)
 {
-    s_homing_mode  = false;
-    s_sc.target    = target_rad;
-    s_sc.done      = false;
-    s_settle_ticks = 0;
-    s_running      = true;
+    s_homing_mode       = false;
+    s_sc.target         = target_rad;
+    s_sc.done           = false;
+    s_settle_ticks      = 0;
+    s_in_deadband_ticks = 0;
+    s_running           = true;
 }
 
 void MotorCtrl_Stop(void)
 {
-    s_vel_sp           = 0.0f;
-    s_acc_sp           = 0.0f;
-    s_spd_integral     = 0.0f;
-    s_pos_integral     = 0.0f;
-    s_running          = false;
+    s_vel_sp            = 0.0f;
+    s_acc_sp            = 0.0f;
+    s_spd_integral      = 0.0f;
+    s_pos_integral      = 0.0f;
+    s_running           = false;
+    s_in_deadband_ticks = 0;
     Motor_SetPWM(0);
     /* Re-seed S-curve from current position so the next SetTarget starts clean */
     float cur       = s_kalman.x[0];
@@ -338,10 +342,18 @@ void MotorCtrl_Stop(void)
 
 bool MotorCtrl_IsAtTarget(void)
 {
+    /* Require S-curve done, ZVD flushed (18 ticks), and arm has been
+       continuously inside POSITION_DEADBAND_RAD for SETTLE_HOLD_TICKS.
+       This replaces the fragile instant velocity snapshot which could be
+       fooled by Kalman noise while the arm was physically at rest.        */
     return s_sc.done
-        && s_settle_ticks >= (uint16_t)(ZVD_T3_STEPS + 10u)
-        && fabsf(s_kalman.x[0] - s_sc.target) < POSITION_DEADBAND_RAD
-        && fabsf(s_kalman.x[1]) < VELOCITY_SETTLED_RADS;
+        && s_settle_ticks   >= (uint16_t)(ZVD_T3_STEPS + 10u)
+        && s_in_deadband_ticks >= SETTLE_HOLD_TICKS;
+}
+
+float MotorCtrl_GetTarget_rad(void)
+{
+    return s_sc.target;
 }
 
 float MotorCtrl_GetPosition_rad(void)
@@ -763,7 +775,12 @@ void MotorCtrl_Tick100Hz(void)
         /* Clear integral inside the deadband so chatter doesn't trigger a massive frozen integral kick */
         s_pos_integral = 0.0f;
         s_pos_prev_meas = pos_actual;
+        /* Drive the deadband-hold counter used by IsAtTarget() */
+        if (s_in_deadband_ticks < 0xFFFFu) s_in_deadband_ticks++;
         goto send_telemetry;
+    } else {
+        /* Outside deadband — reset hold counter so we must re-enter cleanly */
+        s_in_deadband_ticks = 0;
     }
 
     /* Anti-stiction boost: if S-Curve is done but we are stuck outside the deadband,

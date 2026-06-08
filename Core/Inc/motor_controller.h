@@ -18,6 +18,7 @@ void  MotorCtrl_SetTarget(float target_rad);
 void  MotorCtrl_Stop(void);
 bool  MotorCtrl_IsAtTarget(void);
 float MotorCtrl_GetPosition_rad(void);
+float MotorCtrl_GetTarget_rad(void);   /* current S-curve target — for fallback checks */
 /* Homing helpers */
 void  MotorCtrl_HomingCreep(int8_t dir);      /* constant-vel creep at HOMING_VEL_RADS: +1=fwd, -1=rev */
 void  MotorCtrl_HomingCreepVel(int8_t dir, float vel_rads); /* creep at explicit speed */
