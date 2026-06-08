@@ -1377,13 +1377,12 @@ void App_Run(void)
     RobotState.sensors.reset_btn     = HwIo_GetResetBtn();
     RobotState.sensors.proximity     = HwIo_GetProximity();
 
-    /* Mode switch: only act when the arm is idle. Ignore during FAULT (E-stop
-       transients), RUNNING (jog/auto), and HOMING — motor direction reversals
-       inject PWM EMI onto PA6 that can fake a mode flip, clicking the Sysmode
-       relay + pilot lamp mid-motion. Deferring until IDLE means the change
-       takes effect only once motion has fully settled.                        */
+    /* Mode switch: only act when the arm is idle or faulted. Ignore during
+       RUNNING (jog/auto), and HOMING — motor direction reversals inject PWM
+       EMI onto PA6 that can fake a mode flip, clicking the Sysmode relay +
+       pilot lamp mid-motion. Deferring until IDLE means the change takes
+       effect only once motion has fully settled.                        */
     if (RobotState.sensors.selected_mode != s_joy_mode
-        && RobotState.fsm != STATE_FAULT
         && RobotState.fsm != STATE_RUNNING
         && RobotState.fsm != STATE_HOMING) {
         /* Release any active jog before switching modes so the motor stops
