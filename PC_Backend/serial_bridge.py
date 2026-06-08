@@ -373,6 +373,12 @@ def _robot_reader(ser: serial.Serial) -> None:
                         p = line.split(',')
                         if len(p) >= 2 and p[1] == 'DONE':
                             print(f"[AUTO] Sequence DONE after {p[2] if len(p)>2 else '?'} steps")
+                        elif len(p) >= 3 and p[1] == 'CLSENUF':
+                            step    = p[2]
+                            err_deg = int(p[3]) / 100.0 if len(p) > 3 and p[3].lstrip('-').isdigit() else 0.0
+                            print(f"[AUTO] ⚠ step={step} CLOSE-ENOUGH fallback fired — err={err_deg:.2f}° (arm settled via timeout)")
+                        elif len(p) >= 3 and p[1] == 'HOME':
+                            print(f"[AUTO] Return to home at {p[2]}°")
                         elif len(p) >= 4:
                             step = p[1]
                             raw  = int(p[2])

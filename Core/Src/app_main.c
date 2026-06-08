@@ -543,10 +543,12 @@ static void auto_run(void)
                 float pos_err_rad = fabsf(MotorCtrl_GetPosition_rad() - MotorCtrl_GetTarget_rad());
                 float close_enough_rad = deg_to_rad(close_tol);
                 if (pos_err_rad < close_enough_rad) {
-                    /* Close enough — log and proceed as if settled */
-                    snprintf(s_dbg, sizeof(s_dbg), "$AUTO,CLSENUF,%u,%.2f\r\n",
-                             s_seq_step,
-                             (double)(pos_err_rad * (180.0f / (float)M_PI)));
+                    /* Close enough — log and proceed as if settled.
+                       Use integer×100 encoding: newlib-nano has %f disabled.
+                       Python / serial_bridge decode as value/100 degrees.    */
+                    int32_t err_x100 = (int32_t)(pos_err_rad * (180.0f / (float)M_PI) * 100.0f);
+                    snprintf(s_dbg, sizeof(s_dbg), "$AUTO,CLSENUF,%u,%ld\r\n",
+                             s_seq_step, (long)err_x100);
                     UartDma_SendTelemetry(s_dbg);
                     at_target = true;  /* override: treat as arrived */
                 }
