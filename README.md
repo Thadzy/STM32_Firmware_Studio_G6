@@ -339,6 +339,18 @@ g_robot.comms.fault_code = 0
 
 Or press the physical reset button while E-Stop is released.
 
+### Live PID Tuning (Without Recompiling)
+
+You can adjust PID gains, S-curve limits, and Kalman noise parameters on-the-fly:
+
+1. Add `TuningParams` to your Live Expressions.
+2. Expand `TuningParams`. It mirrors the defaults from `params.h` on boot.
+3. Edit the values directly in the debugger:
+   * **Velocity Loop (Inner):** `TuningParams.spd_pid.kp`, `.ki`, `.kd`
+   * **Position Loop (Outer):** `TuningParams.pos_pid.kp`, `.ki`, `.kd`
+   * **S-Curve Limits:** `TuningParams.scurve.vmax_rads`, `.amax_rads2`, `.jmax_rads3`
+4. Once you find the perfect values (e.g., settling time < 0.5s), copy them into `Core/Inc/params.h` so they become the permanent defaults.
+
 ---
 
 ## 8. Variable Reference (`g_robot`)
