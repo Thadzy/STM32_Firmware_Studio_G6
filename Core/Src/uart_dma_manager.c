@@ -142,8 +142,8 @@ bool UartDma_SendModbus(const uint8_t *data, uint16_t len)
         ok = true;
     }
 
-    __set_PRIMASK(ps);
     if (ok) tx_kick();
+    __set_PRIMASK(ps);
     return ok;
 }
 
@@ -173,8 +173,8 @@ bool UartDma_SendTelemetry(const char *str)
     }
 
 done:
-    __set_PRIMASK(ps);
     if (ok) tx_kick();
+    __set_PRIMASK(ps);
     return ok;
 }
 
@@ -219,7 +219,10 @@ bool UartDma_SendJoystick(const uint8_t *data, uint16_t len)
 
 void UartDma_Process(void)
 {
+    uint32_t ps = __get_PRIMASK();
+    __disable_irq();
     tx_kick();  /* re-check after T3.5 expiry */
+    __set_PRIMASK(ps);
 }
 
 uint16_t UartDma_GetTxUsed(void)   { return tx_used(); }
@@ -245,6 +248,9 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size)
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
     if (huart == &hlpuart1) {
+        uint32_t ps = __get_PRIMASK();
+        __disable_irq();
+
         /* Advance tail */
         s_tx_tail = (s_tx_tail + s_tx_dma_len) % UART_TX_BUF_SIZE;
         s_tx_busy = false;
@@ -268,6 +274,8 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
         }
 
         tx_kick();  /* send next chunk or next message immediately */
+
+        __set_PRIMASK(ps);
     } else if (huart == &huart3) {
         s_u3_busy = false;
     }
