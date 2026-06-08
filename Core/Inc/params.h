@@ -101,11 +101,11 @@
 
 /* --- Kalman Filter ---------------------------------------------------------*/
 #define KALMAN_DT               0.001f      /* 1 ms — matches TIM6 period     */
-#define KALMAN_Q_POS            1e-5f       /* process noise — position       */
-#define KALMAN_Q_VEL            1e-3f       /* process noise — velocity       */
-#define KALMAN_Q_ACC            0.1f        /* process noise — acceleration   */
-#define KALMAN_Q_JERK           1.0f        /* process noise — jerk           */
-#define KALMAN_R_POS            2e-6f       /* measurement noise — position   */
+#define KALMAN_Q_POS            1e-8f       /* math is exact; trust the integral   */
+#define KALMAN_Q_VEL            1e-5f       /* lower Q_vel stops the hallucinated sine wave */
+#define KALMAN_Q_ACC            1e-3f       /* disturbance torque changes slowly   */
+#define KALMAN_Q_JERK           1e-2f       /* current/jerk process noise          */
+#define KALMAN_R_POS            5e-5f       /* ~100x quantization variance to force smoothness */
 
 /* --- Position settling window ----------------------------------------------*/
 #define POSITION_DEADBAND_RAD   0.0017f     /* ≈ 0.1° — IsAtTarget threshold    */
