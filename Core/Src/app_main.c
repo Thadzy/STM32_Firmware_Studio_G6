@@ -1385,9 +1385,10 @@ void App_Run(void)
     /* Run main FSM */
     fsm_run();
 
-    /* Pilot Lamp logic: Red (Relay OFF, GPIO_PIN_SET) when in FAULT or E-STOP pressed.
-       Green (Relay ON, GPIO_PIN_RESET) when healthy. */
-    if (RobotState.fsm == STATE_FAULT || RobotState.sensors.estop) {
+    /* Pilot Lamp logic: Red (Relay OFF, GPIO_PIN_SET) when officially in FAULT state.
+       Green (Relay ON, GPIO_PIN_RESET) when healthy. 
+       Do not trigger off raw estop sensor to prevent relay chatter during mechanical vibration. */
+    if (RobotState.fsm == STATE_FAULT) {
         HAL_GPIO_WritePin(Relay_SysStatus_GPIO_Port, Relay_SysStatus_Pin, GPIO_PIN_SET);
     } else {
         HAL_GPIO_WritePin(Relay_SysStatus_GPIO_Port, Relay_SysStatus_Pin, GPIO_PIN_RESET);

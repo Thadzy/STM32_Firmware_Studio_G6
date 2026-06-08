@@ -13,7 +13,7 @@
    Then ESTOP_VERIFY_MS elapses with motor off (EMI gone); if pin is still
    LOW → real press → latch FAULT.  If pin went HIGH → EMI noise → resume.
    Clears immediately on a single HIGH read (fail-safe). */
-#define ESTOP_DEBOUNCE_THRESHOLD    3u
+#define ESTOP_DEBOUNCE_THRESHOLD    10u     /* 100ms continuous hold required to trigger */
 #define ESTOP_VERIFY_MS             50u   /* ms to wait with motor off before confirming fault */
 
 /* Mode selector (PA6): a maintained switch, not momentary — a long hold is

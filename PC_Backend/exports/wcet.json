@@ -4,8 +4,8 @@
   "trajectory": 0,
   "feedforward": 0,
   "dist_comp": 0,
-  "pos_pid": 0,
+  "pos_pid": 3,
   "vel_pid": 94,
-  "motor": 0,
-  "total": 0
+  "motor": 4,
+  "total": 4
 }
